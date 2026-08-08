@@ -52,13 +52,13 @@ The default `WEB_SEARCH_MODEL` is the existing `@cf/openai/gpt-oss-20b`, which C
 
 The Usage tab keeps the existing D1 counters for requests made with this gateway's API keys, and separately reads the account-level Workers AI Neurons metric from Cloudflare. The browser never receives the Cloudflare credential.
 
-Cloudflare's account usage endpoint currently requires a token with account-level `Billing: Read` permission. Add it as a Worker secret (never commit it and never paste it into the frontend):
+Cloudflare's Workers AI analytics dataset requires a token with account-level `Account Analytics: Read` permission. The configured token also retains `Billing: Read` for the account-level billing API. Add it as a Worker secret (never commit it and never paste it into the frontend):
 
 ```sh
 npx wrangler secret put CLOUDFLARE_USAGE_API_TOKEN
 ```
 
-This only enables a read-only API request to an existing Cloudflare account metric. It does not create AI Gateway, Analytics Engine, Queues, or any other paid service. Until the secret is configured, the Usage tab intentionally shows `Setup required` rather than an incorrect `0`.
+This only enables a read-only GraphQL request to Cloudflare's existing Workers AI analytics data. It does not create AI Gateway, Analytics Engine, Queues, or any other paid service. Until the secret is configured, the Usage tab intentionally shows `Setup required` rather than an incorrect `0`.
 
 ## Local checks
 
