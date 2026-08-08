@@ -3,7 +3,7 @@ export interface Env {
   AI_SEARCH: AiSearchInstance;
   DB: D1Database;
   DEFAULT_MODEL: string;
-  /** Existing Workers AI model used for the opt-in web-search planning turn. */
+  /** Existing Workers AI model used for the default web-search planning turn. */
   WEB_SEARCH_MODEL?: string;
   /** Optional zero-setup Cloudflare Web Search binding (discovery only). */
   WEBSEARCH?: WebSearch;
@@ -77,11 +77,11 @@ export interface ChatCompletionRequest {
   messages?: ChatMessage[];
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
-  /** Search the public web through Cloudflare Web Search or the optional SearXNG fallback. */
+  /** Legacy compatibility flag. Public web search is always enabled for chat. */
   web_search?: boolean;
   /** Search the configured ai.lofuyu.com AI Search index instead of the public web. */
   site_search?: boolean;
-  /** Optional controls for web or site search. */
+  /** Optional result/fetch controls for web or site search. */
   web_search_options?: {
     max_num_results?: number;
     max_fetch_chars?: number;

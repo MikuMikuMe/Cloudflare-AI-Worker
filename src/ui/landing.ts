@@ -48,9 +48,9 @@ export function landingPage(origin: string): string {
 
 <div class="hero">
   <h2>Drop-in OpenAI API, running on the edge</h2>
-  <p>Point any OpenAI SDK at this host, use a key you minted yourself, and you're done. Streaming, embeddings, model listing and opt-in tool-based web search all fit the OpenAI chat-completions shape.</p>
+  <p>Point any OpenAI SDK at this host, use a key you minted yourself, and you're done. Streaming, embeddings, model listing and automatic tool-based web search all fit the OpenAI chat-completions shape.</p>
   <div style="margin-top:16px">
-    <span class="tag">SSE streaming</span><span class="tag">Opt-in web search</span><span class="tag">Cloudflare Access SSO</span><span class="tag">Self-service keys</span><span class="tag">Usage tracking</span>
+    <span class="tag">SSE streaming</span><span class="tag">Automatic web search</span><span class="tag">Cloudflare Access SSO</span><span class="tag">Self-service keys</span><span class="tag">Usage tracking</span>
   </div>
 </div>
 
@@ -109,13 +109,13 @@ for await (const chunk of stream) {
   -H "Content-Type: application/json" \\
   -d '{"model":"@cf/meta/llama-3.1-8b-instruct-fp8","messages":[{"role":"user","content":"Hi"}],"stream":true}'</code></pre>
 
-<h4>Opt-in live web search</h4>
+<h4>Automatic live web search</h4>
 <pre><code>curl ${origin}/v1/chat/completions \\
   -H "Authorization: Bearer sk-cfai-..." \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"@cf/meta/llama-3.1-8b-instruct-fp8","messages":[{"role":"user","content":"What changed in web standards this week?"}],"web_search":true,"stream":true}'</code></pre>
+  -d '{"model":"@cf/meta/llama-3.1-8b-instruct-fp8","messages":[{"role":"user","content":"What changed in web standards this week?"}],"stream":true}'</code></pre>
 
-<p style="color:var(--muted);font-size:12.5px;margin-top:10px">Live web search is opt-in. The Worker uses managed Cloudflare Web Search when the account is enabled, or an operator-approved SearXNG-compatible fallback. Use <code>site_search:true</code> for the existing Cloudflare AI Search index.</p>
+<p style="color:var(--muted);font-size:12.5px;margin-top:10px">Live web search is always enabled for chat completions. The Worker exposes server-managed web tools to a tool-capable model and falls back to a direct search when a model/runtime rejects tool input. Use <code>site_search:true</code> for the existing Cloudflare AI Search index.</p>
 
 <footer>Powered by Cloudflare Workers AI · Keys are hashed with SHA-256 and never stored in plaintext</footer>
 </div></body></html>`;

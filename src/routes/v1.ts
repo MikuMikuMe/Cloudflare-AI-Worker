@@ -248,9 +248,11 @@ export async function handleChatCompletions(
     if (body.web_search_options.scope != null) searchScope = body.web_search_options.scope;
   }
 
-  const searchRequested = body.web_search === true || body.site_search === true || body.web_search_options != null;
-  const siteSearchEnabled = searchRequested && (body.site_search === true || searchScope === 'site');
-  const webSearchEnabled = searchRequested && !siteSearchEnabled;
+  // Public web search is part of every chat completion. The legacy
+  // `web_search` flag is accepted but no longer controls execution; clients
+  // can still explicitly choose the indexed site-search path.
+  const siteSearchEnabled = body.site_search === true || searchScope === 'site';
+  const webSearchEnabled = !siteSearchEnabled;
 
   try {
     if (siteSearchEnabled) {
@@ -336,6 +338,7 @@ export async function handleChatCompletions(
           messages,
           inputs,
           normalizeWebSearchOptions({ max_num_results: webSearchMaxResults, max_fetch_chars: webSearchMaxFetchChars }),
+          model,
         );
       } catch (error) {
         if (error instanceof WebSearchError) {
