@@ -4,6 +4,9 @@ export interface Env {
   DEFAULT_MODEL: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  /** Server-side secret; never send this value to the dashboard browser. */
+  CLOUDFLARE_USAGE_API_TOKEN?: string;
 }
 
 /** Identity resolved from a Cloudflare Access JWT. */
