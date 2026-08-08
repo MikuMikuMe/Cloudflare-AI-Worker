@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lucky-salad-6e38",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "a0af41818e1b715f66046b0d7870ce70",
+
+  "observability": {
+    "enabled": true
+  },
+
+  // Workers AI - already present on the original Worker, no new cost surface.
+  "ai": {
+    "binding": "AI"
+  },
+
+  // D1 stores API key hashes + usage counters. Free tier: 5GB / 5M reads / 100k writes per day.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cfai-db",
+      "database_id": "0e93efd9-7ddd-4442-8933-68b4d75832d1",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "vars": {
+    // Default model used when a client sends an unknown/OpenAI-style model name.
+    "DEFAULT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8",
+
+    // --- Cloudflare Access (Zero Trust) ---
+    // Until BOTH of these are set, /admin is fail-closed and returns setup instructions.
+    // ACCESS_TEAM_DOMAIN example: "islantay.cloudflareaccess.com"
+    // ACCESS_AUD is the Application Audience (AUD) tag of the Access application.
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+
+  "routes": [
+    {
+      "pattern": "ai.lofuyu.com",
+      "custom_domain": true
+    }
+  ],
+
+  "workers_dev": true
+}

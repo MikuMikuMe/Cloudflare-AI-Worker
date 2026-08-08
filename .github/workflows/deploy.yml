@@ -1,0 +1,91 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      skip_migrations:
+        description: 'Skip applying D1 migrations'
+        type: boolean
+        default: false
+
+# Never let two deploys race each other onto the same Worker.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  deploy:
+    name: Migrate & deploy
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Schema first: a Worker deployed against a stale schema would 500 on
+      # every dashboard call, so migrations gate the release.
+      - name: Apply D1 migrations
+        if: ${{ inputs.skip_migrations != true }}
+        run: npx wrangler d1 migrations apply cfai-db --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      # NOTE: probe the custom domain, not *.workers.dev — that hostname sits
+      # behind a Cloudflare Access policy and answers 302 to unauthenticated
+      # callers, which would fail this check for the wrong reason.
+      - name: Smoke test
+        run: |
+          set -e
+          echo "Probing /health on the deployed Worker…"
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -s -o /tmp/health.json -w '%{http_code}' https://ai.lofuyu.com/health || true)
+            if [ "$code" = "200" ]; then
+              echo "Healthy:"; cat /tmp/health.json; exit 0
+            fi
+            echo "Attempt $attempt returned HTTP $code; retrying in 6s…"
+            sleep 6
+          done
+          echo "Worker did not report healthy after deploy." >&2
+          cat /tmp/health.json 2>/dev/null || true
+          exit 1

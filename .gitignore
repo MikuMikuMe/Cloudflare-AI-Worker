@@ -172,6 +172,18 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# --- Cloudflare Worker project ---
+node_modules/
+.wrangler/
+dist/
+.npm-cache/
+*.log
+
+# Local secrets — never commit
+.dev.vars
+.dev.vars.*
+.cf-token
+
 # Pyre type checker
 .pyre/
 
