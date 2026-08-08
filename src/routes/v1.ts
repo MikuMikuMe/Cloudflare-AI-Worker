@@ -1,6 +1,7 @@
 /** OpenAI-compatible surface: /v1/models, /v1/chat/completions, /v1/embeddings. */
 
 import { verifyAccessJwt } from '../lib/access';
+import { extractSearchSources, toOpenAISearchStream } from '../lib/ai-search';
 import {
   buildCompletion,
   estimatePromptTokens,
@@ -17,6 +18,8 @@ import {
   resolveEmbeddingModel,
 } from '../lib/models';
 import type { ChatCompletionRequest, ChatMessage, EmbeddingsRequest, Env } from '../types';
+
+const WEB_SEARCH_INSTANCE = 'lofuyu-web-search';
 
 type AuthResult = { ok: true; keyId: string | null } | { ok: false; response: Response };
 
@@ -169,7 +172,102 @@ export async function handleChatCompletions(
     if (auth.keyId) ctx.waitUntil(recordUsage(env, auth.keyId, model, usage).catch(() => undefined));
   };
 
+  const webSearchEnabled = body.web_search === true || body.web_search_options != null;
+  let webSearchMaxResults = 5;
+  if (body.web_search_options != null) {
+    if (typeof body.web_search_options !== 'object' || Array.isArray(body.web_search_options)) {
+      return apiError('web_search_options must be an object.', 400, 'invalid_request_error', null, 'web_search_options');
+    }
+
+    const requested = body.web_search_options.max_num_results;
+    if (requested != null && (!Number.isInteger(requested) || requested < 1 || requested > 50)) {
+      return apiError(
+        'web_search_options.max_num_results must be an integer from 1 to 50.',
+        400,
+        'invalid_request_error',
+        'invalid_value',
+        'web_search_options.max_num_results',
+      );
+    }
+    if (requested != null) webSearchMaxResults = requested;
+  }
+
   try {
+    if (webSearchEnabled) {
+      if (!env.AI_SEARCH) {
+        return apiError(
+          'Web search is not configured on this Worker yet.',
+          503,
+          'api_error',
+          'web_search_unavailable',
+        );
+      }
+
+      const searchRequest: Record<string, unknown> = {
+        ...inputs,
+        model,
+        stream: body.stream === true,
+        ai_search_options: {
+          retrieval: { max_num_results: webSearchMaxResults, return_on_failure: true },
+        },
+      };
+
+      if (body.stream === true) {
+        const upstream = (await env.AI_SEARCH.chatCompletions(searchRequest as any)) as ReadableStream;
+        const stream = toOpenAISearchStream(upstream, {
+          id,
+          model: responseModel,
+          includeUsage: body.stream_options?.include_usage === true,
+          promptTokens,
+          onDone: accountUsage,
+        });
+
+        return new Response(stream, {
+          headers: {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive',
+            'x-accel-buffering': 'no',
+            'x-ai-search-instance': WEB_SEARCH_INSTANCE,
+            ...API_CORS,
+          },
+        });
+      }
+
+      const raw = (await env.AI_SEARCH.chatCompletions(searchRequest as any)) as unknown as Record<string, unknown>;
+      const text = extractText(raw);
+      const usage = extractUsage(raw, promptTokens, text);
+      accountUsage(usage);
+      const choices = Array.isArray(raw.choices) && raw.choices.length
+        ? raw.choices
+        : [
+            {
+              index: 0,
+              message: { role: 'assistant', content: text },
+              logprobs: null,
+              finish_reason: 'stop',
+            },
+          ];
+
+      return json(
+        {
+          ...raw,
+          id: typeof raw.id === 'string' ? raw.id : id,
+          object: 'chat.completion',
+          created: typeof raw.created === 'number' ? raw.created : Math.floor(Date.now() / 1000),
+          model: typeof raw.model === 'string' ? raw.model : responseModel,
+          choices,
+          usage: raw.usage ?? usage,
+          web_search: {
+            instance: WEB_SEARCH_INSTANCE,
+            sources: extractSearchSources(raw.chunks),
+          },
+        },
+        200,
+        API_CORS,
+      );
+    }
+
     if (body.stream === true) {
       const upstream = (await env.AI.run(model as any, { ...inputs, stream: true } as any)) as ReadableStream;
       const stream = toOpenAIStream(upstream, {

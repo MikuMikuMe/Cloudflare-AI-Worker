@@ -1,5 +1,6 @@
 export interface Env {
   AI: Ai;
+  AI_SEARCH: AiSearchInstance;
   DB: D1Database;
   DEFAULT_MODEL: string;
   ACCESS_TEAM_DOMAIN: string;
@@ -42,6 +43,10 @@ export interface ChatCompletionRequest {
   messages?: ChatMessage[];
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
+  /** Cloudflare AI Search is invoked only when this extension is true. */
+  web_search?: boolean;
+  /** Optional controls for an enabled web search request. */
+  web_search_options?: { max_num_results?: number } | null;
   temperature?: number;
   top_p?: number;
   max_tokens?: number;

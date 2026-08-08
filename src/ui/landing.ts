@@ -48,9 +48,9 @@ export function landingPage(origin: string): string {
 
 <div class="hero">
   <h2>Drop-in OpenAI API, running on the edge</h2>
-  <p>Point any OpenAI SDK at this host, use a key you minted yourself, and you're done. Streaming, embeddings and model listing all behave the way the official API does.</p>
+  <p>Point any OpenAI SDK at this host, use a key you minted yourself, and you're done. Streaming, embeddings, model listing and opt-in web search all fit the OpenAI chat-completions shape.</p>
   <div style="margin-top:16px">
-    <span class="tag">SSE streaming</span><span class="tag">Cloudflare Access SSO</span><span class="tag">Self-service keys</span><span class="tag">Usage tracking</span>
+    <span class="tag">SSE streaming</span><span class="tag">Opt-in web search</span><span class="tag">Cloudflare Access SSO</span><span class="tag">Self-service keys</span><span class="tag">Usage tracking</span>
   </div>
 </div>
 
@@ -64,7 +64,7 @@ export function landingPage(origin: string): string {
 <table>
   <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
   <tr><td>GET</td><td><code>/v1/models</code></td><td>List available models</td></tr>
-  <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>Chat, streaming or buffered</td></tr>
+  <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>Chat, streaming, buffered or opt-in web search</td></tr>
   <tr><td>POST</td><td><code>/v1/embeddings</code></td><td>Text embeddings</td></tr>
   <tr><td>GET</td><td><code>/health</code></td><td>Liveness probe</td></tr>
 </table>
@@ -108,6 +108,12 @@ for await (const chunk of stream) {
   -H "Authorization: Bearer sk-cfai-..." \\
   -H "Content-Type: application/json" \\
   -d '{"model":"@cf/meta/llama-3.1-8b-instruct-fp8","messages":[{"role":"user","content":"Hi"}],"stream":true}'</code></pre>
+
+<h4>Opt-in web search</h4>
+<pre><code>curl ${origin}/v1/chat/completions \\
+  -H "Authorization: Bearer sk-cfai-..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"@cf/meta/llama-3.1-8b-instruct-fp8","messages":[{"role":"user","content":"What is on my website?"}],"web_search":true,"stream":true}'</code></pre>
 
 <footer>Powered by Cloudflare Workers AI · Keys are hashed with SHA-256 and never stored in plaintext</footer>
 </div></body></html>`;

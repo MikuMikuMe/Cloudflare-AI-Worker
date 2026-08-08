@@ -6,6 +6,7 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`, including Server-Sent Events streaming with `stream: true`
+- Optional per-request web search over the indexed `ai.lofuyu.com` website with `web_search: true`
 - `POST /v1/embeddings`
 - OpenAI-style API keys created and revoked from the authenticated dashboard
 - Cloudflare Access SSO for `/admin`; an API key is not needed to sign in or use the dashboard playground
@@ -13,6 +14,12 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 - A Usage tab with a live account-level Workers AI Neurons metric from Cloudflare's account usage API
 
 The Worker calls the existing Workers AI binding directly. It does not add an AI Gateway, Queue, Durable Object, Vectorize index, or another paid service. The official `openai` JavaScript SDK is used by `scripts/verify-openai-sdk.mjs` to test the public compatibility surface.
+
+## Opt-in web search
+
+The Worker has one direct AI Search binding to the `lofuyu-web-search` web-crawler instance. A normal chat does not search. Set `web_search: true` on an individual `/v1/chat/completions` request to search the indexed `ai.lofuyu.com` site before generating the answer. Streaming responses remain SSE-compatible; AI Search source URLs are exposed in a `web_search.sources` extension chunk, and buffered responses include the same `web_search.sources` field.
+
+You can limit retrieval results with `web_search_options.max_num_results` from 1 to 50 (the default is 5). The crawler is configured with link discovery, so it follows links from the app domain rather than searching the unrestricted public internet.
 
 ## Live Workers AI usage
 

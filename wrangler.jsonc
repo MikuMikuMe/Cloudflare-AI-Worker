@@ -15,6 +15,16 @@
     "binding": "AI"
   },
 
+  // AI Search - one opt-in web-crawler instance for the existing app domain.
+  // The direct instance binding keeps the Worker scoped to this one resource.
+  "ai_search": [
+    {
+      "binding": "AI_SEARCH",
+      "instance_name": "lofuyu-web-search",
+      "remote": true
+    }
+  ],
+
   // D1 stores API key hashes + usage counters. Free tier: 5GB / 5M reads / 100k writes per day.
   "d1_databases": [
     {

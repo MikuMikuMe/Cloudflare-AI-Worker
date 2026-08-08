@@ -56,6 +56,8 @@ const STYLES = `
   .msg.user{align-self:flex-end;background:#26365e;color:#e8eeff}
   .msg.assistant{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
   .composer{display:flex;gap:9px}
+  .search-toggle{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12.5px;cursor:pointer;white-space:nowrap}
+  .search-toggle input{accent-color:var(--accent);width:15px;height:15px}
   .composer textarea{flex:1;resize:none;max-height:110px}
   .bars{display:flex;align-items:flex-end;gap:3px;height:110px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:11px}
   .bar{flex:1;background:linear-gradient(180deg,var(--accent),#a2521200);border-radius:3px 3px 0 0;min-height:2px}
@@ -116,6 +118,7 @@ export function dashboardPage(email: string, teamDomain: string): string {
       <div><h2>Playground</h2><div class="hint">Streams through <code>/v1/chat/completions</code> using your Access session — no key needed here.</div></div>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="model"></select>
+        <label class="search-toggle" title="Search the indexed ai.lofuyu.com website for this request"><input id="web-search" type="checkbox"> Web search</label>
         <button class="btn ghost" id="clear">Clear</button>
       </div>
     </div>
@@ -270,12 +273,13 @@ function send(){
 
   var out = addBubble('assistant', '');
   var acc = '';
+  var sources = [];
   $('#send').disabled = true;
 
   fetch('/admin/api/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: $('#model').value, messages: history, stream: true })
+    body: JSON.stringify({ model: $('#model').value, messages: history, stream: true, web_search: $('#web-search').checked })
   }).then(function(res){
     if (!res.ok) return res.json().then(function(e){ throw new Error((e.error && e.error.message) || 'Request failed'); });
     var reader = res.body.getReader();
@@ -285,6 +289,9 @@ function send(){
       return reader.read().then(function(step){
         if (step.done){
           history.push({ role: 'assistant', content: acc });
+          if (sources.length) {
+            out.textContent = acc + '\n\nSources:\n' + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join('\n');
+          }
           $('#send').disabled = false;
           return;
         }
@@ -298,6 +305,7 @@ function send(){
           if (payload === '[DONE]') return;
           try {
             var j = JSON.parse(payload);
+            if (j.web_search && Array.isArray(j.web_search.sources)) sources = j.web_search.sources;
             var piece = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
             if (piece){ acc += piece; out.textContent = acc; $('#chat').scrollTop = $('#chat').scrollHeight; }
           } catch(e){}
