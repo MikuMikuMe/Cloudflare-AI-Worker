@@ -26,6 +26,9 @@
   ],
 
   "vars": {
+    // Public account identifier used only to address the existing Cloudflare account.
+    "CLOUDFLARE_ACCOUNT_ID": "a0af41818e1b715f66046b0d7870ce70",
+
     // Default model used when a client sends an unknown/OpenAI-style model name.
     "DEFAULT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8",
 
