@@ -341,9 +341,18 @@ export async function searchWeb(
   const cleanedQuery = query.trim().slice(0, 512);
   if (!cleanedQuery) throw new WebSearchError('web_search requires a non-empty query.', 'invalid_query');
 
-  // Prefer the managed binding. It has one shared public-web corpus and does
-  // not require an instance, database, container, or operator-hosted service.
-  if (env.WEBSEARCH) return searchCloudflareWeb(env.WEBSEARCH, cleanedQuery, maxResults);
+  // Prefer the managed binding when it is available. If the account has the
+  // binding but Cloudflare has not enabled the provider for it, fall through
+  // to the explicitly configured SearXNG endpoint instead of making search
+  // unavailable. This also lets an operator migrate back to the managed
+  // provider later without changing clients.
+  if (env.WEBSEARCH) {
+    try {
+      return await searchCloudflareWeb(env.WEBSEARCH, cleanedQuery, maxResults);
+    } catch (error) {
+      if (!env.SEARXNG_URL) throw error;
+    }
+  }
 
   if (!env.SEARXNG_URL) {
     throw new WebSearchError(
