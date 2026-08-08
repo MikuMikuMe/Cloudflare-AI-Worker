@@ -241,7 +241,7 @@ $('#new-key').onclick = function(){
 };
 
 /* ---------- playground ---------- */
-var history = [];
+var chatHistory = [];
 
 function addBubble(role, text){
   var d = document.createElement('div');
@@ -262,14 +262,14 @@ fetch('/v1/models').then(function(r){ return r.json(); }).then(function(d){
     });
 });
 
-$('#clear').onclick = function(){ history = []; $('#chat').innerHTML = ''; };
+$('#clear').onclick = function(){ chatHistory = []; $('#chat').innerHTML = ''; };
 
 function send(){
   var text = $('#prompt').value.trim();
   if (!text) return;
   $('#prompt').value = ''; $('#prompt').style.height = 'auto';
   addBubble('user', text);
-  history.push({ role: 'user', content: text });
+  chatHistory.push({ role: 'user', content: text });
 
   var out = addBubble('assistant', '');
   var acc = '';
@@ -279,7 +279,7 @@ function send(){
   fetch('/admin/api/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: $('#model').value, messages: history, stream: true, web_search: $('#web-search').checked })
+    body: JSON.stringify({ model: $('#model').value, messages: chatHistory, stream: true, web_search: $('#web-search').checked })
   }).then(function(res){
     if (!res.ok) return res.json().then(function(e){ throw new Error((e.error && e.error.message) || 'Request failed'); });
     var reader = res.body.getReader();
@@ -288,7 +288,7 @@ function send(){
     function pump(){
       return reader.read().then(function(step){
         if (step.done){
-          history.push({ role: 'assistant', content: acc });
+          chatHistory.push({ role: 'assistant', content: acc });
           if (sources.length) {
             out.textContent = acc + String.fromCharCode(10, 10) + 'Sources:' + String.fromCharCode(10) + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join(String.fromCharCode(10));
           }
