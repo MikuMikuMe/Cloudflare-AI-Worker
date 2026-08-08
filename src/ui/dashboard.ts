@@ -258,7 +258,7 @@ function send(){
   var acc = '';
   $('#send').disabled = true;
 
-  fetch('/v1/chat/completions', {
+  fetch('/admin/api/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: $('#model').value, messages: history, stream: true })

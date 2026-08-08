@@ -6,6 +6,7 @@
 import { isAccessConfigured, verifyAccessJwt } from '../lib/access';
 import { json } from '../lib/http';
 import { createKey, deleteKey, listKeys, revokeKey } from '../lib/keys';
+import { handleChatCompletions } from './v1';
 import type { AccessIdentity, Env } from '../types';
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -44,12 +45,23 @@ export async function requireIdentity(
   return { ok: true, identity };
 }
 
-export async function handleAdminApi(request: Request, env: Env, path: string): Promise<Response> {
+export async function handleAdminApi(
+  request: Request,
+  env: Env,
+  path: string,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const auth = await requireIdentity(request, env);
   if (!auth.ok) return auth.response;
 
   const { identity } = auth;
   const method = request.method.toUpperCase();
+
+  // The browser playground is intentionally authenticated by the Access
+  // session, not by an API key. External callers still use /v1/* with keys.
+  if (path === '/admin/api/chat/completions' && method === 'POST') {
+    return handleChatCompletions(request, env, ctx, true);
+  }
 
   if (path === '/admin/api/me' && method === 'GET') {
     return json({ email: identity.email, sub: identity.sub }, 200, NO_STORE);

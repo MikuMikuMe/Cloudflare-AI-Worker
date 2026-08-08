@@ -88,7 +88,7 @@ export default {
 
     // ---- dashboard -------------------------------------------------------
     if (path.startsWith('/admin/api/')) {
-      return handleAdminApi(request, env, path);
+      return handleAdminApi(request, env, path, ctx);
     }
 
     if (path === '/admin') {

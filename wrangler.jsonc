@@ -31,10 +31,10 @@
 
     // --- Cloudflare Access (Zero Trust) ---
     // Until BOTH of these are set, /admin is fail-closed and returns setup instructions.
-    // ACCESS_TEAM_DOMAIN example: "islantay.cloudflareaccess.com"
+    // Existing Zero Trust team used by the Access application.
+    "ACCESS_TEAM_DOMAIN": "cosmiclatte.cloudflareaccess.com",
     // ACCESS_AUD is the Application Audience (AUD) tag of the Access application.
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_AUD": "e3e783e9325f85a45622c24467e4bd6a06abe172530fb1a31045e3e9b9617cf3"
   },
 
   "routes": [

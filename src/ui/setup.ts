@@ -31,9 +31,9 @@ export function setupPage(host: string): string {
   <p>The dashboard is locked until single sign-on is wired up. Nobody can sign in or create API keys until you finish these steps — that's intentional.</p>
 
   <ol>
-    <li>Open <strong>Cloudflare Zero Trust</strong> and, if prompted, choose a team name. The Free plan covers 50 users at no cost.</li>
+    <li>Open <strong>Cloudflare Zero Trust</strong> and, if prompted, choose a team name. Review the plan shown before saving; this Worker does not create or require another compute/database service.</li>
     <li>Go to <strong>Access &rarr; Applications &rarr; Add an application &rarr; Self-hosted</strong>.</li>
-    <li>Set the application domain to <code>${escapeHtml(host)}</code> with path <code>admin</code>.</li>
+    <li>Set the application domain to <code>${escapeHtml(host)}</code> with path <code>/admin*</code>.</li>
     <li>Add a policy: action <strong>Allow</strong>, rule <strong>Emails</strong> &rarr; your own address.</li>
     <li>Copy the <strong>Application Audience (AUD) tag</strong> from the app's overview page.</li>
     <li>Put the team domain and AUD into <code>wrangler.jsonc</code> and redeploy:</li>
