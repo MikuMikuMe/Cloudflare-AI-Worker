@@ -6,6 +6,8 @@ interface CompletionOptions {
   includeUsage: boolean;
   promptTokens: number;
   onDone: (usage: Usage) => void;
+  priorUsage?: Usage;
+  webSearchSources?: Array<Record<string, unknown>>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -21,7 +23,16 @@ export function estimateTextTokens(text: string): number {
 }
 
 export function estimatePromptTokens(messages: ChatMessage[]): number {
-  return messages.reduce((total, message) => total + 4 + estimateTextTokens(message.content ?? ''), 2);
+  return messages.reduce(
+    (total, message) =>
+      total +
+      4 +
+      estimateTextTokens(message.content ?? '') +
+      estimateTextTokens(message.name ?? '') +
+      estimateTextTokens(message.tool_call_id ?? '') +
+      estimateTextTokens(message.tool_calls ? JSON.stringify(message.tool_calls) : ''),
+    2,
+  );
 }
 
 export function newCompletionId(): string {
@@ -99,6 +110,15 @@ function doneLine(encoder: TextEncoder): Uint8Array {
   return encoder.encode('data: [DONE]\n\n');
 }
 
+function combineUsage(prior: Usage | undefined, promptTokens: number, text: string): Usage {
+  const completionTokens = estimateTextTokens(text);
+  return {
+    prompt_tokens: (prior?.prompt_tokens ?? 0) + promptTokens,
+    completion_tokens: (prior?.completion_tokens ?? 0) + completionTokens,
+    total_tokens: (prior?.total_tokens ?? 0) + promptTokens + completionTokens,
+  };
+}
+
 /** Convert Workers AI's NDJSON stream into OpenAI Chat Completions SSE. */
 export function toOpenAIStream(upstream: ReadableStream, options: CompletionOptions): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -115,6 +135,19 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
           choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
         }),
       );
+
+      if (options.webSearchSources?.length) {
+        controller.enqueue(
+          sseLine(encoder, {
+            id: options.id,
+            object: 'chat.completion.chunk',
+            created,
+            model: options.model,
+            choices: [],
+            web_search: { sources: options.webSearchSources },
+          }),
+        );
+      }
 
       void (async () => {
         const reader = upstream.getReader();
@@ -159,12 +192,7 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
           buffer += decoder.decode();
           if (buffer.trim() && !finishedByUpstream) consumeLine(buffer);
 
-          const completionTokens = estimateTextTokens(text);
-          const usage: Usage = {
-            prompt_tokens: options.promptTokens,
-            completion_tokens: completionTokens,
-            total_tokens: options.promptTokens + completionTokens,
-          };
+          const usage = combineUsage(options.priorUsage, options.promptTokens, text);
           controller.enqueue(
             sseLine(encoder, {
               id: options.id,

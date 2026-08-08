@@ -15,6 +15,15 @@
     "binding": "AI"
   },
 
+  // Managed Cloudflare Web Search is zero-setup and discovery-only. The Worker
+  // fetches the returned public URLs itself; no crawler instance is created.
+  // This account currently reports the experimental binding as account_disabled,
+  // so SEARXNG_URL remains an optional fallback until Cloudflare enables it.
+  "websearch": {
+    "binding": "WEBSEARCH",
+    "remote": true
+  },
+
   // AI Search - one opt-in web-crawler instance for the existing app domain.
   // The direct instance binding keeps the Worker scoped to this one resource.
   "ai_search": [
@@ -41,6 +50,13 @@
 
     // Default model used when a client sends an unknown/OpenAI-style model name.
     "DEFAULT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8",
+
+    // Existing Workers AI model used only for the opt-in web-search planning turn.
+    // This model is documented by Cloudflare as supporting traditional function calling.
+    "WEB_SEARCH_MODEL": "@cf/openai/gpt-oss-20b",
+
+    // Set SEARXNG_URL outside this file only when a SearXNG-compatible JSON endpoint is approved.
+    // Do not point production at an arbitrary public instance without reviewing its terms and reliability.
 
     // --- Cloudflare Access (Zero Trust) ---
     // Until BOTH of these are set, /admin is fail-closed and returns setup instructions.

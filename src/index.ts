@@ -44,9 +44,12 @@ export default {
         {
           status: 'ok',
           service: 'cloudflare-ai-worker',
-          version: '2.0.0',
+          version: '2.1.0',
           access_configured: isAccessConfigured(env),
           default_model: env.DEFAULT_MODEL,
+          web_search_configured: Boolean(env.WEBSEARCH || env.SEARXNG_URL),
+          web_search_provider: env.WEBSEARCH ? 'cloudflare' : env.SEARXNG_URL ? 'searxng' : null,
+          site_search_configured: Boolean(env.AI_SEARCH),
         },
         200,
         API_CORS,

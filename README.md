@@ -6,7 +6,8 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`, including Server-Sent Events streaming with `stream: true`
-- Optional per-request web search over the indexed `ai.lofuyu.com` website with `web_search: true`
+- Optional per-request live web search with `web_search: true` through Cloudflare Web Search, with an optional SearXNG-compatible fallback
+- Optional per-request search over the indexed `ai.lofuyu.com` website with `site_search: true`
 - `POST /v1/embeddings`
 - OpenAI-style API keys created and revoked from the authenticated dashboard
 - Cloudflare Access SSO for `/admin`; an API key is not needed to sign in or use the dashboard playground
@@ -15,11 +16,38 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 
 The Worker calls the existing Workers AI binding directly. It does not add an AI Gateway, Queue, Durable Object, Vectorize index, or another paid service. The official `openai` JavaScript SDK is used by `scripts/verify-openai-sdk.mjs` to test the public compatibility surface.
 
-## Opt-in web search
+## Opt-in live search
 
-The Worker has one direct AI Search binding to the `lofuyu-web-search` web-crawler instance. A normal chat does not search. Set `web_search: true` on an individual `/v1/chat/completions` request to search the indexed `ai.lofuyu.com` site before generating the answer. Streaming responses remain SSE-compatible; AI Search source URLs are exposed in a `web_search.sources` extension chunk, and buffered responses include the same `web_search.sources` field.
+`web_search: true` runs a server-owned tool loop:
 
-You can limit retrieval results with `web_search_options.max_num_results` from 1 to 50 (the default is 5). The crawler is configured with link discovery, so it follows links from the app domain rather than searching the unrestricted public internet.
+1. An existing Workers AI function-calling model requests `web_search` and, when needed, `web_fetch`.
+2. The Worker uses the managed Cloudflare Web Search binding when available, or the explicitly configured SearXNG-compatible fallback, then fetches selected public pages.
+3. The requested chat model receives the tool results and streams the final answer.
+
+The managed binding is zero-setup and discovery-only: it returns public URLs and catalog metadata, while the Worker fetches page content itself. It does not create an AI Search instance, container, database, or other service. This account currently returns `account_disabled` when the experimental Cloudflare Web Search API is queried, so the deployed code reports a clear provider error until Cloudflare enables it. The Worker never accepts client-defined executable functions; it only executes the two read-only web tools. Search source URLs are returned in a `web_search.sources` extension field/chunk.
+
+```sh
+# Optional fallback only; this does not create a Cloudflare service.
+npx wrangler secret put SEARXNG_API_KEY   # only if your endpoint requires one
+# Set SEARXNG_URL as a Worker variable through your approved deployment path.
+```
+
+Example request:
+
+```json
+{
+  "model": "@cf/meta/llama-3.1-8b-instruct-fp8",
+  "messages": [{ "role": "user", "content": "What changed in web standards this week?" }],
+  "web_search": true,
+  "stream": true
+}
+```
+
+Use `site_search: true` (or `web_search_options: { "scope": "site" }`) to use the existing `lofuyu-web-search` AI Search crawler over `ai.lofuyu.com`. That crawler is a site index, not unrestricted internet search.
+
+`web_search_options.max_num_results` accepts 1-50 (Cloudflare Web Search returns at most 20; the fallback returns at most 10), and `max_fetch_chars` accepts 2,000-40,000.
+
+The default `WEB_SEARCH_MODEL` is the existing `@cf/openai/gpt-oss-20b`, which Cloudflare lists as supporting function calling. Web-search requests therefore use one additional Workers AI planning inference before the requested model's final inference; normal requests are unchanged.
 
 ## Live Workers AI usage
 

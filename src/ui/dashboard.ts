@@ -118,7 +118,7 @@ export function dashboardPage(email: string, teamDomain: string): string {
       <div><h2>Playground</h2><div class="hint">Streams through <code>/v1/chat/completions</code> using your Access session — no key needed here.</div></div>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="model"></select>
-        <label class="search-toggle" title="Search the indexed ai.lofuyu.com website for this request"><input id="web-search" type="checkbox"> Web search</label>
+        <label class="search-toggle" title="Search the live public web for this request through Cloudflare Web Search or the optional fallback"><input id="web-search" type="checkbox"> Live web search</label>
         <button class="btn ghost" id="clear">Clear</button>
       </div>
     </div>

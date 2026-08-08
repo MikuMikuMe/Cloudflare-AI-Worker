@@ -13,11 +13,16 @@ import {
 import { API_CORS, apiError, json } from '../lib/http';
 import { authenticateKey, extractBearer, recordUsage } from '../lib/keys';
 import {
+  WebSearchError,
+  normalizeWebSearchOptions,
+  prepareWebSearchAgent,
+} from '../lib/web-search';
+import {
   modelListPayload,
   resolveChatModel,
   resolveEmbeddingModel,
 } from '../lib/models';
-import type { ChatCompletionRequest, ChatMessage, EmbeddingsRequest, Env } from '../types';
+import type { ChatCompletionRequest, ChatMessage, ChatToolCall, EmbeddingsRequest, Env } from '../types';
 
 const WEB_SEARCH_INSTANCE = 'lofuyu-web-search';
 
@@ -61,6 +66,26 @@ async function authorise(request: Request, env: Env): Promise<AuthResult> {
 
 const VALID_ROLES = new Set<ChatMessage['role']>(['system', 'user', 'assistant', 'tool', 'developer']);
 
+function normaliseToolCalls(raw: unknown): ChatToolCall[] | null {
+  if (!Array.isArray(raw)) return null;
+  const calls: ChatToolCall[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') return null;
+    const call = value as Record<string, unknown>;
+    const fn = call.function && typeof call.function === 'object' ? (call.function as Record<string, unknown>) : null;
+    const name = typeof fn?.name === 'string' ? fn.name : typeof call.name === 'string' ? call.name : '';
+    const args = fn?.arguments ?? call.arguments;
+    const id = typeof call.id === 'string' && call.id.trim() ? call.id.trim().slice(0, 128) : crypto.randomUUID();
+    if (!name || (typeof args !== 'string' && (!args || typeof args !== 'object'))) return null;
+    calls.push({
+      id,
+      type: 'function',
+      function: { name: name.slice(0, 128), arguments: typeof args === 'string' ? args : JSON.stringify(args) },
+    });
+  }
+  return calls;
+}
+
 function normaliseMessages(raw: unknown): ChatMessage[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
 
@@ -70,7 +95,7 @@ function normaliseMessages(raw: unknown): ChatMessage[] | null {
     const message = value as Record<string, unknown>;
     if (typeof message.role !== 'string' || !VALID_ROLES.has(message.role as ChatMessage['role'])) return null;
 
-    let content = '';
+    let content: string | null = null;
     if (typeof message.content === 'string') {
       content = message.content;
     } else if (Array.isArray(message.content)) {
@@ -97,6 +122,13 @@ function normaliseMessages(raw: unknown): ChatMessage[] | null {
       role: message.role as ChatMessage['role'],
       content,
       ...(typeof message.name === 'string' ? { name: message.name.slice(0, 64) } : {}),
+      ...(typeof message.tool_call_id === 'string' ? { tool_call_id: message.tool_call_id.slice(0, 128) } : {}),
+      ...(message.tool_calls == null
+        ? {}
+        : (() => {
+            const toolCalls = normaliseToolCalls(message.tool_calls);
+            return toolCalls ? { tool_calls: toolCalls } : null;
+          })()),
     });
   }
   return out;
@@ -172,8 +204,9 @@ export async function handleChatCompletions(
     if (auth.keyId) ctx.waitUntil(recordUsage(env, auth.keyId, model, usage).catch(() => undefined));
   };
 
-  const webSearchEnabled = body.web_search === true || body.web_search_options != null;
   let webSearchMaxResults = 5;
+  let webSearchMaxFetchChars = 20_000;
+  let searchScope: 'web' | 'site' = 'web';
   if (body.web_search_options != null) {
     if (typeof body.web_search_options !== 'object' || Array.isArray(body.web_search_options)) {
       return apiError('web_search_options must be an object.', 400, 'invalid_request_error', null, 'web_search_options');
@@ -190,10 +223,37 @@ export async function handleChatCompletions(
       );
     }
     if (requested != null) webSearchMaxResults = requested;
+
+    const requestedChars = body.web_search_options.max_fetch_chars;
+    if (requestedChars != null && (!Number.isInteger(requestedChars) || requestedChars < 2_000 || requestedChars > 40_000)) {
+      return apiError(
+        'web_search_options.max_fetch_chars must be an integer from 2000 to 40000.',
+        400,
+        'invalid_request_error',
+        'invalid_value',
+        'web_search_options.max_fetch_chars',
+      );
+    }
+    if (requestedChars != null) webSearchMaxFetchChars = requestedChars;
+
+    if (body.web_search_options.scope != null && body.web_search_options.scope !== 'web' && body.web_search_options.scope !== 'site') {
+      return apiError(
+        'web_search_options.scope must be either "web" or "site".',
+        400,
+        'invalid_request_error',
+        'invalid_value',
+        'web_search_options.scope',
+      );
+    }
+    if (body.web_search_options.scope != null) searchScope = body.web_search_options.scope;
   }
 
+  const searchRequested = body.web_search === true || body.site_search === true || body.web_search_options != null;
+  const siteSearchEnabled = searchRequested && (body.site_search === true || searchScope === 'site');
+  const webSearchEnabled = searchRequested && !siteSearchEnabled;
+
   try {
-    if (webSearchEnabled) {
+    if (siteSearchEnabled) {
       if (!env.AI_SEARCH) {
         return apiError(
           'Web search is not configured on this Worker yet.',
@@ -258,9 +318,77 @@ export async function handleChatCompletions(
           model: typeof raw.model === 'string' ? raw.model : responseModel,
           choices,
           usage: raw.usage ?? usage,
-          web_search: {
+          site_search: {
             instance: WEB_SEARCH_INSTANCE,
             sources: extractSearchSources(raw.chunks),
+          },
+        },
+        200,
+        API_CORS,
+      );
+    }
+
+    if (webSearchEnabled) {
+      let webAgent;
+      try {
+        webAgent = await prepareWebSearchAgent(
+          env,
+          messages,
+          inputs,
+          normalizeWebSearchOptions({ max_num_results: webSearchMaxResults, max_fetch_chars: webSearchMaxFetchChars }),
+        );
+      } catch (error) {
+        if (error instanceof WebSearchError) {
+          const status = error.code === 'provider_not_configured' ? 503 : 502;
+          return apiError(error.message, status, 'api_error', error.code);
+        }
+        throw error;
+      }
+
+      const finalInputs: Record<string, unknown> = { ...inputs, messages: webAgent.messages };
+      const finalPromptTokens = estimatePromptTokens(webAgent.messages);
+      const webSearchSources = webAgent.sources.map((source) => ({ ...source }));
+
+      if (body.stream === true) {
+        const upstream = (await env.AI.run(model as any, { ...finalInputs, stream: true } as any)) as ReadableStream;
+        const stream = toOpenAIStream(upstream, {
+          id,
+          model: responseModel,
+          includeUsage: body.stream_options?.include_usage === true,
+          promptTokens: finalPromptTokens,
+          priorUsage: webAgent.priorUsage,
+          webSearchSources,
+          onDone: accountUsage,
+        });
+
+        return new Response(stream, {
+          headers: {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive',
+            'x-accel-buffering': 'no',
+            'x-web-search-provider': webAgent.provider,
+            ...API_CORS,
+          },
+        });
+      }
+
+      const raw = (await env.AI.run(model as any, finalInputs as any)) as unknown as Record<string, unknown>;
+      const text = extractText(raw);
+      const finalUsage = extractUsage(raw, finalPromptTokens, text);
+      const usage = {
+        prompt_tokens: webAgent.priorUsage.prompt_tokens + finalUsage.prompt_tokens,
+        completion_tokens: webAgent.priorUsage.completion_tokens + finalUsage.completion_tokens,
+        total_tokens: webAgent.priorUsage.total_tokens + finalUsage.total_tokens,
+      };
+      accountUsage(usage);
+
+      return json(
+        {
+          ...buildCompletion(id, responseModel, text, usage),
+          web_search: {
+            provider: webAgent.provider,
+            sources: webSearchSources,
           },
         },
         200,

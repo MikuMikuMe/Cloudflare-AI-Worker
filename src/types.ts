@@ -3,6 +3,14 @@ export interface Env {
   AI_SEARCH: AiSearchInstance;
   DB: D1Database;
   DEFAULT_MODEL: string;
+  /** Existing Workers AI model used for the opt-in web-search planning turn. */
+  WEB_SEARCH_MODEL?: string;
+  /** Optional zero-setup Cloudflare Web Search binding (discovery only). */
+  WEBSEARCH?: WebSearch;
+  /** Base URL of a SearXNG-compatible JSON search endpoint. */
+  SEARXNG_URL?: string;
+  /** Optional bearer token for a protected SearXNG-compatible endpoint. */
+  SEARXNG_API_KEY?: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
@@ -36,17 +44,53 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'developer';
   content: string | null;
   name?: string;
+  tool_call_id?: string;
+  tool_calls?: ChatToolCall[];
 }
+
+export interface ChatToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface ChatTool {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+export type ToolChoice =
+  | 'none'
+  | 'auto'
+  | 'required'
+  | { type: 'function'; function: { name: string } };
 
 export interface ChatCompletionRequest {
   model?: string;
   messages?: ChatMessage[];
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
-  /** Cloudflare AI Search is invoked only when this extension is true. */
+  /** Search the public web through Cloudflare Web Search or the optional SearXNG fallback. */
   web_search?: boolean;
-  /** Optional controls for an enabled web search request. */
-  web_search_options?: { max_num_results?: number } | null;
+  /** Search the configured ai.lofuyu.com AI Search index instead of the public web. */
+  site_search?: boolean;
+  /** Optional controls for web or site search. */
+  web_search_options?: {
+    max_num_results?: number;
+    max_fetch_chars?: number;
+    scope?: 'web' | 'site';
+  } | null;
+  /** OpenAI-compatible tool definitions are accepted for model tool calling. */
+  tools?: ChatTool[];
+  tool_choice?: ToolChoice;
+  parallel_tool_calls?: boolean;
   temperature?: number;
   top_p?: number;
   max_tokens?: number;

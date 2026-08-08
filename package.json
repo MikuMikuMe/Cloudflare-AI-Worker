@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-ai-worker",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "OpenAI-compatible AI gateway on Cloudflare Workers, with Cloudflare Access SSO and self-service API keys",
   "type": "module",
