@@ -7,7 +7,7 @@ interface CompletionOptions {
   promptTokens: number;
   onDone: (usage: Usage) => void;
   priorUsage?: Usage;
-  webSearchSources?: Array<Record<string, unknown>>;
+  webSearch?: Record<string, unknown>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -136,7 +136,7 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
         }),
       );
 
-      if (options.webSearchSources?.length) {
+      if (options.webSearch) {
         controller.enqueue(
           sseLine(encoder, {
             id: options.id,
@@ -144,7 +144,7 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
             created,
             model: options.model,
             choices: [],
-            web_search: { sources: options.webSearchSources },
+            web_search: options.webSearch,
           }),
         );
       }

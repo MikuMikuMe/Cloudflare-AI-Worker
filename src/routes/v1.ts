@@ -351,6 +351,12 @@ export async function handleChatCompletions(
       const finalInputs: Record<string, unknown> = { ...inputs, messages: webAgent.messages };
       const finalPromptTokens = estimatePromptTokens(webAgent.messages);
       const webSearchSources = webAgent.sources.map((source) => ({ ...source }));
+      const webSearch = {
+        performed: true,
+        provider: webAgent.provider,
+        queries: webAgent.searches.map((search) => ({ ...search })),
+        sources: webSearchSources,
+      };
 
       if (body.stream === true) {
         const upstream = (await env.AI.run(model as any, { ...finalInputs, stream: true } as any)) as ReadableStream;
@@ -360,7 +366,7 @@ export async function handleChatCompletions(
           includeUsage: body.stream_options?.include_usage === true,
           promptTokens: finalPromptTokens,
           priorUsage: webAgent.priorUsage,
-          webSearchSources,
+          webSearch,
           onDone: accountUsage,
         });
 
@@ -389,10 +395,7 @@ export async function handleChatCompletions(
       return json(
         {
           ...buildCompletion(id, responseModel, text, usage),
-          web_search: {
-            provider: webAgent.provider,
-            sources: webSearchSources,
-          },
+          web_search: webSearch,
         },
         200,
         API_CORS,

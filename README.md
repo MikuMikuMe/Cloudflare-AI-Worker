@@ -24,7 +24,7 @@ Every `POST /v1/chat/completions` request runs a server-owned web-search tool lo
 2. The Worker uses the managed Cloudflare Web Search binding when available, or the explicitly configured SearXNG-compatible fallback, then fetches selected public pages.
 3. The requested chat model receives a bounded evidence message and streams the final answer. If the planner/model rejects tool input, the Worker performs one deterministic search and continues.
 
-The managed binding is zero-setup and discovery-only: it returns public URLs and catalog metadata, while the Worker fetches page content itself. It does not create an AI Search instance, container, database, or other service. This account currently returns `account_disabled` when the experimental Cloudflare Web Search API is queried, so the deployed code reports a clear provider error until Cloudflare enables it. The Worker never accepts client-defined executable functions; it only executes the two read-only web tools. Search source URLs are returned in a `web_search.sources` extension field/chunk.
+The managed binding is zero-setup and discovery-only: it returns public URLs and catalog metadata, while the Worker fetches page content itself. It does not create an AI Search instance, container, database, or other service. If the account returns `account_disabled` for the experimental Cloudflare Web Search binding, the deployed code transparently falls back to the configured SearXNG endpoint. Every completion reports `web_search.performed`, the provider, executed query/result counts, and source URLs; streaming clients receive the same metadata in an empty-choice SSE chunk. The Worker never accepts client-defined executable functions; it only executes the two read-only web tools.
 
 ```sh
 # Optional fallback only; this does not create a Cloudflare service.
@@ -46,7 +46,7 @@ Use `site_search: true` (or `web_search_options: { "scope": "site" }`) to use th
 
 `web_search_options.max_num_results` accepts 1-50 (Cloudflare Web Search returns at most 20; the fallback returns at most 10), and `max_fetch_chars` accepts 2,000-40,000.
 
-The default `WEB_SEARCH_MODEL` is the existing `@cf/openai/gpt-oss-20b`, which Cloudflare lists as supporting function calling. Chat requests therefore use the web-search planning path before the requested model's final inference. The legacy `web_search` field is accepted for compatibility but no longer turns search on or off.
+The default `WEB_SEARCH_MODEL` is the existing `@cf/openai/gpt-oss-20b`, which Cloudflare lists as supporting function calling. The Qwen3 and Nemotron models in the model list are also recognized as native function-calling planners, so selecting either model gives that model the server-owned web tools. Chat requests therefore use the web-search planning path before the requested model's final inference. The legacy `web_search` field is accepted for compatibility but no longer turns search on or off.
 
 ## Live Workers AI usage
 

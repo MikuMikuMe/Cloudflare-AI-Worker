@@ -273,7 +273,25 @@ function send(){
   var out = addBubble('assistant', '');
   var acc = '';
   var sources = [];
+  var webSearch = null;
   $('#send').disabled = true;
+
+  function searchFooter(){
+    if (!webSearch) return '';
+    var queries = Array.isArray(webSearch.queries) ? webSearch.queries : [];
+    var queryText = queries.map(function(q){
+      var count = typeof q.result_count === 'number' ? q.result_count : 0;
+      return (q.query || 'query') + ' (' + count + ' result' + (count === 1 ? '' : 's') + ')';
+    }).join('; ');
+    var footer = 'Web search: ' + (webSearch.provider || 'server') + (queryText ? ' · ' + queryText : '');
+    if (sources.length) {
+      footer += String.fromCharCode(10, 10) + 'Sources:' + String.fromCharCode(10)
+        + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join(String.fromCharCode(10));
+    } else {
+      footer += String.fromCharCode(10, 10) + 'No usable source URLs were returned.';
+    }
+    return footer;
+  }
 
   fetch('/admin/api/chat/completions', {
     method: 'POST',
@@ -288,9 +306,8 @@ function send(){
       return reader.read().then(function(step){
         if (step.done){
           chatHistory.push({ role: 'assistant', content: acc });
-          if (sources.length) {
-            out.textContent = acc + String.fromCharCode(10, 10) + 'Sources:' + String.fromCharCode(10) + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join(String.fromCharCode(10));
-          }
+          var footer = searchFooter();
+          if (footer) out.textContent = acc + String.fromCharCode(10, 10) + footer;
           $('#send').disabled = false;
           return;
         }
@@ -304,7 +321,10 @@ function send(){
           if (payload === '[DONE]') return;
           try {
             var j = JSON.parse(payload);
-            if (j.web_search && Array.isArray(j.web_search.sources)) sources = j.web_search.sources;
+            if (j.web_search) {
+              webSearch = j.web_search;
+              if (Array.isArray(j.web_search.sources)) sources = j.web_search.sources;
+            }
             var piece = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
             if (piece){ acc += piece; out.textContent = acc; $('#chat').scrollTop = $('#chat').scrollHeight; }
           } catch(e){}
