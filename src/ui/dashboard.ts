@@ -59,6 +59,19 @@ const STYLES = `
   .composer textarea{flex:1;resize:none;max-height:110px}
   .bars{display:flex;align-items:flex-end;gap:3px;height:110px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:11px}
   .bar{flex:1;background:linear-gradient(180deg,var(--accent),#a2521200);border-radius:3px 3px 0 0;min-height:2px}
+  .cf-usage{background:linear-gradient(135deg,#151c2a,#141821);border:1px solid #30405c;border-radius:12px;padding:17px 19px;margin-bottom:20px}
+  .cf-usage-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .cf-usage-title{font-size:13px;font-weight:650;color:var(--fg)}
+  .cf-usage-sub{font-size:12px;color:var(--muted);margin-top:4px}
+  .cf-usage-value{font-size:26px;font-weight:750;letter-spacing:-.03em;color:#dce7ff;text-align:right}
+  .cf-usage-value small{font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0}
+  .cf-meter{height:7px;background:#20293a;border-radius:99px;overflow:hidden;margin-top:15px}
+  .cf-meter span{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),#8caaff);border-radius:99px;min-width:0;transition:width .25s}
+  .cf-usage-note{font-size:12px;color:var(--muted);margin-top:9px;line-height:1.5}
+  .cf-usage.error{border-color:#55313b}
+  .cf-usage.error .cf-usage-value{font-size:16px;color:#ffb5b0;letter-spacing:0}
+  .cf-usage.setup{border-color:#5a482a}
+  .cf-usage.setup .cf-usage-value{font-size:16px;color:#ffd28c;letter-spacing:0}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 18px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
   .toast.show{opacity:1}
 `;
@@ -114,7 +127,8 @@ export function dashboardPage(email: string, teamDomain: string): string {
   </section>
 
   <section class="pane" id="pane-usage">
-    <div class="row"><div><h2>Usage</h2><div class="hint">Last 30 days, aggregated across your keys.</div></div></div>
+    <div class="row"><div><h2>Usage</h2><div class="hint">Gateway usage for your keys, plus live Workers AI consumption from Cloudflare.</div></div><button class="btn ghost" id="refresh-usage">Refresh</button></div>
+    <div class="cf-usage" id="cloudflare-usage"><div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div><div class="cf-usage-sub">Neurons used today</div></div><div class="cf-usage-value">Loading...</div></div></div>
     <div class="stats" id="stats"></div>
     <div style="margin-bottom:8px;font-size:12.5px;color:var(--muted)">Daily requests</div>
     <div class="bars" id="bars"></div>
@@ -308,7 +322,47 @@ $('#prompt').addEventListener('input', function(){
 });
 
 /* ---------- usage ---------- */
+function neurons(n){
+  return Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function renderCloudflareUsage(d){
+  var used = Number(d.used_neurons || 0);
+  var limit = Number(d.daily_limit_neurons || 10000);
+  var percent = limit > 0 ? Math.min(100, Math.max(0, (used / limit) * 100)) : 0;
+  $('#cloudflare-usage').className = 'cf-usage';
+  $('#cloudflare-usage').innerHTML =
+    '<div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div>'
+    + '<div class="cf-usage-sub">Neurons used today · UTC reset at 00:00</div></div>'
+    + '<div class="cf-usage-value">' + neurons(used) + ' <small>/ ' + neurons(limit) + ' neurons</small></div></div>'
+    + '<div class="cf-meter"><span style="width:' + percent.toFixed(2) + '%"></span></div>'
+    + '<div class="cf-usage-note">Live account-level data from Cloudflare. This is separate from the gateway counters below.</div>';
+}
+
+function renderCloudflareUsageError(d){
+  var setup = d && d.error === 'cloudflare_usage_not_configured';
+  $('#cloudflare-usage').className = 'cf-usage ' + (setup ? 'setup' : 'error');
+  $('#cloudflare-usage').innerHTML =
+    '<div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div>'
+    + '<div class="cf-usage-sub">Neurons used today</div></div>'
+    + '<div class="cf-usage-value">' + (setup ? 'Setup required' : 'Unavailable') + '</div></div>'
+    + '<div class="cf-usage-note">' + esc((d && d.message) || 'Refresh to try again.') + '</div>';
+}
+
+function loadCloudflareUsage(){
+  $('#cloudflare-usage').className = 'cf-usage';
+  $('#cloudflare-usage').innerHTML = '<div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div><div class="cf-usage-sub">Neurons used today</div></div><div class="cf-usage-value">Loading...</div></div>';
+  fetch('/admin/api/cloudflare-usage')
+    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
+    .then(function(result){
+      if (!result.ok) { renderCloudflareUsageError(result.data); return; }
+      renderCloudflareUsage(result.data);
+    })
+    .catch(function(){ renderCloudflareUsageError({ message: 'Could not reach the Cloudflare usage endpoint.' }); });
+}
+
 function loadUsage(){
+  loadCloudflareUsage();
   fetch('/admin/api/usage').then(function(r){ return r.json(); }).then(function(d){
     var t = d.totals || {};
     $('#stats').innerHTML =
@@ -334,6 +388,8 @@ function loadUsage(){
       : '<div class="empty">No model usage yet.</div>';
   }).catch(function(){ $('#stats').innerHTML = ''; });
 }
+
+$('#refresh-usage').onclick = loadUsage;
 
 loadKeys();
 </script>
