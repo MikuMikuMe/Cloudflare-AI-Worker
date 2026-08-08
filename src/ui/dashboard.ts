@@ -290,7 +290,7 @@ function send(){
         if (step.done){
           history.push({ role: 'assistant', content: acc });
           if (sources.length) {
-            out.textContent = acc + '\n\nSources:\n' + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join('\n');
+            out.textContent = acc + String.fromCharCode(10, 10) + 'Sources:' + String.fromCharCode(10) + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join(String.fromCharCode(10));
           }
           $('#send').disabled = false;
           return;
