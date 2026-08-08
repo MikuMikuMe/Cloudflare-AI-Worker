@@ -10,8 +10,21 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 - OpenAI-style API keys created and revoked from the authenticated dashboard
 - Cloudflare Access SSO for `/admin`; an API key is not needed to sign in or use the dashboard playground
 - SHA-256 key hashes and lightweight daily usage counters in the existing `cfai-db` D1 database
+- A Usage tab with a live account-level Workers AI Neurons metric from Cloudflare's account usage API
 
 The Worker calls the existing Workers AI binding directly. It does not add an AI Gateway, Queue, Durable Object, Vectorize index, or another paid service. The official `openai` JavaScript SDK is used by `scripts/verify-openai-sdk.mjs` to test the public compatibility surface.
+
+## Live Workers AI usage
+
+The Usage tab keeps the existing D1 counters for requests made with this gateway's API keys, and separately reads the account-level Workers AI Neurons metric from Cloudflare. The browser never receives the Cloudflare credential.
+
+Cloudflare's account usage endpoint currently requires a token with account-level `Billing: Read` permission. Add it as a Worker secret (never commit it and never paste it into the frontend):
+
+```sh
+npx wrangler secret put CLOUDFLARE_USAGE_API_TOKEN
+```
+
+This only enables a read-only API request to an existing Cloudflare account metric. It does not create AI Gateway, Analytics Engine, Queues, or any other paid service. Until the secret is configured, the Usage tab intentionally shows `Setup required` rather than an incorrect `0`.
 
 ## Local checks
 

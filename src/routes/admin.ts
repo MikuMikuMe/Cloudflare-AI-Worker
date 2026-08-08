@@ -4,6 +4,7 @@
  */
 
 import { isAccessConfigured, verifyAccessJwt } from '../lib/access';
+import { CloudflareUsageError, fetchCloudflareNeurons } from '../lib/cloudflare-usage';
 import { json } from '../lib/http';
 import { createKey, deleteKey, listKeys, revokeKey } from '../lib/keys';
 import { handleChatCompletions } from './v1';
@@ -170,6 +171,25 @@ export async function handleAdminApi(
       200,
       NO_STORE,
     );
+  }
+
+  if (path === '/admin/api/cloudflare-usage' && method === 'GET') {
+    try {
+      return json(await fetchCloudflareNeurons(env), 200, NO_STORE);
+    } catch (error) {
+      if (error instanceof CloudflareUsageError) {
+        return json({ error: error.code, message: error.message }, error.status, NO_STORE);
+      }
+
+      return json(
+        {
+          error: 'cloudflare_usage_unavailable',
+          message: 'Cloudflare account usage is temporarily unavailable.',
+        },
+        502,
+        NO_STORE,
+      );
+    }
   }
 
   return json({ error: 'not_found' }, 404, NO_STORE);
