@@ -48,7 +48,13 @@ export default {
           access_configured: isAccessConfigured(env),
           default_model: env.DEFAULT_MODEL,
           web_search_configured: Boolean(env.WEBSEARCH || env.SEARXNG_URL),
-          web_search_provider: env.WEBSEARCH ? 'cloudflare' : env.SEARXNG_URL ? 'searxng' : null,
+          web_search_provider: env.WEBSEARCH
+            ? env.SEARXNG_URL
+              ? 'cloudflare (SearXNG fallback)'
+              : 'cloudflare'
+            : env.SEARXNG_URL
+              ? 'searxng'
+              : null,
           site_search_configured: Boolean(env.AI_SEARCH),
         },
         200,
