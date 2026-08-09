@@ -51,9 +51,25 @@ jobs:
       - name: Test
         run: npm test
 
+  security:
+    name: Dependency security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Audit the complete lockfile without installing or executing package scripts.
+      # High and critical advisories fail the job and block deployment.
+      - name: Audit dependencies
+        run: npm audit --package-lock-only --audit-level=high
+
   deploy:
     name: Migrate & deploy
-    needs: verify
+    needs: [verify, security]
     # Cloudflare's Git integration is the default CD path for this Worker and
     # is already connected to this repository. Run the GitHub-owned deployment
     # only when explicitly requested from workflow_dispatch.
