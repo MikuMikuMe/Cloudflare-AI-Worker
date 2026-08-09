@@ -159,10 +159,121 @@ test('NVIDIA chat request keeps streaming and never exposes the upstream key', a
     assert.equal(headers.get('authorization'), 'Bearer test-nvidia-secret');
     assert.equal(headers.get('accept'), 'text/event-stream');
     assert.match(String(request?.init?.body), /"stream":true/);
+    await response.body?.cancel();
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('NVIDIA streaming uses a constant number of timeout registrations', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  let timeoutRegistrations = 0;
+
+  (globalThis as any).setTimeout = (handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    timeoutRegistrations += 1;
+    return originalSetTimeout(handler, timeout, ...args);
+  };
+  globalThis.fetch = (async () => new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (let index = 0; index < 100; index += 1) {
+          controller.enqueue(encoder.encode(`data: {"index":${index}}\n\n`));
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  )) as typeof fetch;
+
+  try {
+    const response = await requestNvidiaChat(
+      { NVIDIA_NIM_API_KEY: 'test-nvidia-secret' },
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      { messages: [{ role: 'user', content: 'hello' }], stream: true },
+    );
+    await response.text();
+    assert.ok(timeoutRegistrations <= 2, `expected constant timers, got ${timeoutRegistrations}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+for (const prompt of [
+  'hello',
+  'write a cpp code and also give me a python equivalent, teach me cpp',
+]) {
+  test(`NVIDIA streams ${JSON.stringify(prompt)} directly without a blocking web planner`, async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<Record<string, unknown>> = [];
+    let firstChunkProduced = false;
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push(body);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            setTimeout(() => {
+              firstChunkProduced = true;
+              controller.enqueue(new TextEncoder().encode(
+                'data: {"choices":[{"delta":{"content":"first "}}]}\n\n',
+              ));
+              controller.enqueue(new TextEncoder().encode(
+                'data: {"choices":[{"delta":{"content":"second"}}]}\n\ndata: [DONE]\n\n',
+              ));
+              controller.close();
+            }, 20);
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const env = {
+        AI: {},
+        AI_SEARCH: undefined,
+        DB: database([{ id: 'nvidia/nemotron-3-ultra-550b-a55b', created: 1, owned_by: 'nvidia' }]),
+        DEFAULT_MODEL: '@cf/meta/llama-3.1-8b-instruct-fp8',
+        NVIDIA_NIM_API_KEY: 'test-nvidia-secret',
+        SEARXNG_URL: 'https://search.example.test',
+        ACCESS_TEAM_DOMAIN: 'example.cloudflareaccess.com',
+        ACCESS_AUD: 'test-audience',
+      } as any;
+
+      const response = await handleChatCompletions(
+        new Request('https://ai.example.test/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: 'nvidia/nemotron-3-ultra-550b-a55b',
+            messages: [{ role: 'user', content: prompt }],
+            stream: true,
+          }),
+        }),
+        env,
+        context(),
+        true,
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(firstChunkProduced, false, 'the Worker should return before NVIDIA finishes generating');
+      const output = await response.text();
+      assert.match(output, /"content":"first "/);
+      assert.match(output, /"content":"second"/);
+      assert.match(output, /data: \[DONE\]/);
+      assert.doesNotMatch(output, /chatcmpl-/, 'trusted NVIDIA SSE should be relayed without token-by-token rewriting');
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].stream, true);
+      assert.equal(requests[0].tools, undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
 
 test('model list disables Cloudflare models while keeping NVIDIA models selectable', () => {
   const nvidia = selectFreeNvidiaModels(
@@ -245,7 +356,7 @@ test('trusted dashboard chat retries a Cloudflare quota rejection with the close
     if (url === 'https://integrate.api.nvidia.com/v1/chat/completions') {
       nvidiaRequestModel = JSON.parse(String(init?.body)).model;
       return new Response(
-        'data: {"choices":[{"delta":{"content":"fallback answer"}}]}\n\ndata: [DONE]\n\n',
+        `data: {"model":"${fallbackModel}","choices":[{"delta":{"content":"fallback answer"}}]}\n\ndata: [DONE]\n\n`,
         { status: 200, headers: { 'content-type': 'text/event-stream' } },
       );
     }
@@ -446,7 +557,7 @@ test('an open binding quota circuit discloses streaming and non-streaming fallba
       const body = JSON.parse(String(init?.body));
       if (body.stream === true) {
         return new Response(
-          'data: {"choices":[{"delta":{"content":"circuit stream fallback"}}]}\n\ndata: [DONE]\n\n',
+          `data: {"model":"${fallbackModel}","choices":[{"delta":{"content":"circuit stream fallback"}}]}\n\ndata: [DONE]\n\n`,
           { headers: { 'content-type': 'text/event-stream' } },
         );
       }

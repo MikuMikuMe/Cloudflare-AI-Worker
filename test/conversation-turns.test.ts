@@ -190,6 +190,64 @@ test('a model failure finalizes an empty assistant instead of leaving a generati
   assert.doesNotMatch(JSON.stringify(detail), /provider detail/);
 });
 
+test('a disconnect while waiting for provider headers finalizes the generating row', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const conversation = await createConversation(store.db, owner, { model: 'model/test' });
+  const env = { DB: store.db, DEFAULT_MODEL: 'model/test' } as any;
+  const abortController = new AbortController();
+  const protectedWork: Promise<unknown>[] = [];
+  const ctx = {
+    waitUntil(promise: Promise<unknown>) {
+      protectedWork.push(promise);
+    },
+    passThroughOnException() {},
+  } as unknown as ExecutionContext;
+  let providerStarted: () => void = () => undefined;
+  const providerWasStarted = new Promise<void>((resolve) => {
+    providerStarted = resolve;
+  });
+  let releaseProvider: (response: Response) => void = () => undefined;
+  const providerResponse = new Promise<Response>((resolve) => {
+    releaseProvider = resolve;
+  });
+  const request = new Request(`https://app.test/admin/api/conversations/${conversation.id}/turns`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: 'Disconnect safely',
+      model: 'model/test',
+      client_turn_id: 'turn_disconnect_01',
+      expected_version: 0,
+    }),
+    signal: abortController.signal,
+  });
+
+  const pendingResponse = handlePersistentConversationTurn(
+    request,
+    env,
+    `/admin/api/conversations/${conversation.id}/turns`,
+    ctx,
+    identity,
+    {
+      runChat: async () => {
+        providerStarted();
+        return providerResponse;
+      },
+    },
+  );
+  await providerWasStarted;
+  abortController.abort('navigation');
+  await Promise.all(protectedWork);
+
+  const interrupted = await getConversation(store.db, owner, conversation.id);
+  assert.equal(interrupted?.messages.at(-1)?.status, 'interrupted');
+  assert.ok(interrupted?.messages.at(-1)?.completed_at);
+
+  releaseProvider(new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+  assert.equal((await pendingResponse)?.status, 408);
+});
+
 test('a provider fallback is disclosed and persisted with the model that answered', async (t) => {
   const store = await database();
   t.after(store.dispose);

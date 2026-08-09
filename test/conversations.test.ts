@@ -181,11 +181,29 @@ test('a stale generating turn is marked interrupted before the next turn begins'
   }, { now: 301_001 });
   assert.equal(recovered?.created, true);
 
-  const detail = await getConversation(store.db, OWNER_A, conversation.id);
+  const detail = await getConversation(store.db, OWNER_A, conversation.id, { now: 301_001 });
   assert.deepEqual(detail?.messages.map((message) => message.status), [
     'complete', 'interrupted', 'complete', 'generating',
   ]);
   assert.equal(detail?.messages[1].completed_at, 301_001);
+});
+
+test('reading a conversation recovers an orphaned generating turn', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const conversation = await createConversation(store.db, OWNER_A, { title: 'Read recovery', model: 'model/one' }, {
+    id: '10000000-0000-4000-8000-000000000001', now: 100,
+  });
+  await beginConversationTurn(store.db, OWNER_A, conversation.id, {
+    content: 'Abandoned', model: 'model/one', client_turn_id: 'turn_00000001', expected_version: 0,
+  }, { now: 1_000 });
+
+  const fresh = await getConversation(store.db, OWNER_A, conversation.id, { now: 1_800_999 });
+  assert.equal(fresh?.messages[1].status, 'generating');
+
+  const recovered = await getConversation(store.db, OWNER_A, conversation.id, { now: 1_801_000 });
+  assert.equal(recovered?.messages[1].status, 'interrupted');
+  assert.equal(recovered?.messages[1].completed_at, 1_801_000);
 });
 
 test('message history is keyset-paginated while prompt reads stay bounded to the recent tail', async (t) => {

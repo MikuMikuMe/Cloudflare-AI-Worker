@@ -15,6 +15,11 @@ export interface PersistedAssistantResult {
 
 type FinalizeAssistant = (result: PersistedAssistantResult) => Promise<void>;
 
+export interface PersistedStreamLifecycleOptions {
+  signal?: AbortSignal;
+  waitUntil?: (promise: Promise<void>) => void;
+}
+
 interface SafeSource {
   number: number;
   url: string;
@@ -32,6 +37,8 @@ interface SafeQuery {
 const MAX_PERSISTED_ASSISTANT_CHARACTERS = 128_000;
 const MAX_PERSISTED_METADATA_CHARACTERS = 30_000;
 const MAX_SSE_BUFFER_CHARACTERS = 512_000;
+const STREAM_FORWARD_INTERVAL_MS = 250;
+const STREAM_FORWARD_BATCH_CHARACTERS = 16_000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -198,6 +205,10 @@ function safeUsage(value: unknown): Usage | undefined {
 }
 
 function eventData(block: string): string {
+  const trimmed = block.trim();
+  if (!trimmed.includes('\n') && trimmed.startsWith('data:')) {
+    return trimmed.slice(5).trim();
+  }
   return block
     .split(/\r?\n/)
     .filter((line) => line.trimStart().startsWith('data:'))
@@ -206,8 +217,67 @@ function eventData(block: string): string {
     .trim();
 }
 
-function encodedBlock(encoder: TextEncoder, block: string): Uint8Array {
-  return encoder.encode(`${block.trim()}\n\n`);
+/**
+ * NVIDIA emits one small OpenAI delta object per token. Extract the common
+ * content-only case without allocating and parsing the entire object; fall
+ * back to JSON.parse for usage, error, and extension events.
+ */
+function fastDeltaContent(data: string): string | undefined {
+  if (!data.includes('"choices"') || !data.includes('"delta"')) return undefined;
+  const marker = '"content":';
+  const markerAt = data.indexOf(marker);
+  if (markerAt < 0) return undefined;
+
+  let start = markerAt + marker.length;
+  while (start < data.length && /\s/.test(data[start])) start += 1;
+  if (data[start] !== '"') return undefined;
+
+  let escaped = false;
+  for (let index = start + 1; index < data.length; index += 1) {
+    const character = data[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (character !== '"') continue;
+
+    const raw = data.slice(start + 1, index);
+    if (!raw.includes('\\')) return raw;
+    try {
+      const decoded: unknown = JSON.parse(data.slice(start, index + 1));
+      return typeof decoded === 'string' ? decoded : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function requiresFullPayloadParse(data: string): boolean {
+  return data.includes('"error"')
+    || data.includes('"usage"')
+    || data.includes('"tool_calls"')
+    || data.includes('"web_search"')
+    || data.includes('"site_search"');
+}
+
+function streamFailure(error: unknown): { message: string; code: string } {
+  const record = asRecord(error);
+  const rawCode = boundedString(record?.code, 100);
+  const code = rawCode && /^[a-z][a-z0-9_]{0,99}$/.test(rawCode)
+    ? rawCode
+    : 'upstream_error';
+  const rawMessage = error instanceof Error
+    ? error.message
+    : boundedString(record?.message, 500);
+  return {
+    message: rawMessage || 'The response stream failed.',
+    code,
+  };
 }
 
 /**
@@ -219,6 +289,7 @@ export function wrapPersistedSseResponse(
   response: Response,
   finalize: FinalizeAssistant,
   initialEvents: unknown[] = [],
+  lifecycle: PersistedStreamLifecycleOptions = {},
 ): Response {
   if (!response.body) return response;
 
@@ -236,6 +307,15 @@ export function wrapPersistedSseResponse(
   let persistenceLimitError: string | undefined;
   let cancelled = false;
   let finalization: Promise<void> | undefined;
+  let cancellation: Promise<void> | undefined;
+  let pendingForward = '';
+  let lastForwardAt = 0;
+  let forwardTimer: ReturnType<typeof setTimeout> | undefined;
+  let lifecycleSettled = false;
+  let settleLifecycle: () => void = () => undefined;
+  const lifecyclePromise = new Promise<void>((resolve) => {
+    settleLifecycle = resolve;
+  });
 
   const snapshot = (status: PersistedAssistantStatus): PersistedAssistantResult => ({
     text,
@@ -252,14 +332,79 @@ export function wrapPersistedSseResponse(
     return finalization;
   };
 
+  const finishLifecycle = (): void => {
+    if (lifecycleSettled) return;
+    lifecycleSettled = true;
+    lifecycle.signal?.removeEventListener('abort', abortHandler);
+    settleLifecycle();
+  };
+
+  const cancelAndFinalize = (reason: unknown): Promise<void> => {
+    cancelled = true;
+    if (forwardTimer != null) {
+      clearTimeout(forwardTimer);
+      forwardTimer = undefined;
+    }
+    if (!cancellation) {
+      cancellation = Promise.allSettled([
+        upstream.cancel(reason),
+        finalizeOnce(errorMessage ? 'error' : 'interrupted'),
+      ]).then(() => undefined).finally(finishLifecycle);
+    }
+    return cancellation;
+  };
+
+  const abortHandler = (): void => {
+    cancellation = cancelAndFinalize(lifecycle.signal?.reason ?? 'client disconnected');
+  };
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const event of initialEvents) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       }
-      void (async () => {
+      const pump = (async () => {
+        const clearForwardTimer = (): void => {
+          if (forwardTimer == null) return;
+          clearTimeout(forwardTimer);
+          forwardTimer = undefined;
+        };
+
+        const flushForward = (): void => {
+          clearForwardTimer();
+          if (cancelled || !pendingForward) return;
+          controller.enqueue(encoder.encode(pendingForward));
+          pendingForward = '';
+          lastForwardAt = Date.now();
+        };
+
+        const scheduleForward = (): void => {
+          if (cancelled || !pendingForward || forwardTimer != null) return;
+          forwardTimer = setTimeout(() => {
+            forwardTimer = undefined;
+            flushForward();
+          }, STREAM_FORWARD_INTERVAL_MS);
+        };
+
+        const queueBlock = (block: string, force = false): void => {
+          if (cancelled) return;
+          pendingForward += `${block.trim()}\n\n`;
+          const now = Date.now();
+          if (
+            force
+            || lastForwardAt === 0
+            || pendingForward.length >= STREAM_FORWARD_BATCH_CHARACTERS
+            || now - lastForwardAt >= STREAM_FORWARD_INTERVAL_MS
+          ) {
+            flushForward();
+          } else {
+            scheduleForward();
+          }
+        };
+
         const forwardPersistenceError = (): void => {
           if (cancelled) return;
+          flushForward();
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({
@@ -275,6 +420,7 @@ export function wrapPersistedSseResponse(
 
         const forwardStreamError = (message: string, code: string): void => {
           if (cancelled) return;
+          flushForward();
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({ error: { message, type: 'api_error', code } })}\n\n`,
@@ -282,21 +428,40 @@ export function wrapPersistedSseResponse(
           );
         };
 
+        const appendText = (piece: string): void => {
+          if (!piece) return;
+          if (text.length + piece.length > MAX_PERSISTED_ASSISTANT_CHARACTERS) {
+            persistenceLimitError = 'The model response exceeded the saved-answer limit.';
+            errorMessage = persistenceLimitError;
+          } else {
+            text += piece;
+          }
+        };
+
         const processBlock = async (block: string): Promise<boolean> => {
           const data = eventData(block);
           if (!data) {
-            if (!cancelled) controller.enqueue(encodedBlock(encoder, block));
+            queueBlock(block);
             return false;
           }
           if (data === '[DONE]') {
             try {
               if (!errorMessage && !text.trim()) errorMessage = 'The model returned an empty response.';
               await finalizeOnce(errorMessage ? 'error' : 'complete');
-              if (!cancelled) controller.enqueue(encodedBlock(encoder, block));
+              queueBlock(block, true);
             } catch {
               forwardPersistenceError();
             }
             return true;
+          }
+
+          if (!requiresFullPayloadParse(data) && (responseModel != null || !data.includes('"model"'))) {
+            const piece = fastDeltaContent(data);
+            if (piece !== undefined) {
+              appendText(piece);
+              if (!persistenceLimitError) queueBlock(block);
+              return false;
+            }
           }
 
           try {
@@ -305,14 +470,7 @@ export function wrapPersistedSseResponse(
             const nextModel = boundedString(record?.model, 200);
             if (nextModel) responseModel = nextModel;
             const piece = extractText(payload);
-            if (piece) {
-              if (text.length + piece.length > MAX_PERSISTED_ASSISTANT_CHARACTERS) {
-                persistenceLimitError = 'The model response exceeded the saved-answer limit.';
-                errorMessage = persistenceLimitError;
-              } else {
-                text += piece;
-              }
-            }
+            appendText(piece);
             const nextUsage = safeUsage(record?.usage);
             if (nextUsage) usage = nextUsage;
             const nextWebSearch = safeSearch(record?.web_search);
@@ -328,7 +486,7 @@ export function wrapPersistedSseResponse(
             // Preserve extension events we do not understand, but never store them.
           }
 
-          if (!cancelled && !persistenceLimitError) controller.enqueue(encodedBlock(encoder, block));
+          if (!persistenceLimitError) queueBlock(block);
           return false;
         };
 
@@ -371,6 +529,7 @@ export function wrapPersistedSseResponse(
           buffer += decoder.decode();
           if (!sawDone && buffer.trim()) sawDone = await processBlock(buffer);
           if (!sawDone) {
+            flushForward();
             try {
               await finalizeOnce(errorMessage ? 'error' : 'interrupted');
             } catch {
@@ -378,29 +537,36 @@ export function wrapPersistedSseResponse(
             }
           }
           if (sawDone) await upstream.cancel('completion received').catch(() => undefined);
+          flushForward();
           controller.close();
-        } catch {
+        } catch (error) {
           if (cancelled) return;
-          errorMessage = errorMessage ?? 'The response stream failed.';
+          const failure = streamFailure(error);
+          errorMessage = errorMessage ?? failure.message;
+          errorCode = errorCode ?? failure.code;
+          flushForward();
           try {
             await finalizeOnce('error');
+            forwardStreamError(errorMessage, errorCode);
           } catch {
             forwardPersistenceError();
           }
           controller.close();
         } finally {
           upstream.releaseLock();
+          if (!cancelled) finishLifecycle();
         }
       })();
+      void pump;
     },
     async cancel(reason) {
-      cancelled = true;
-      await Promise.allSettled([
-        upstream.cancel(reason),
-        finalizeOnce(errorMessage ? 'error' : 'interrupted'),
-      ]);
+      await cancelAndFinalize(reason);
     },
   });
+
+  lifecycle.waitUntil?.(lifecyclePromise);
+  lifecycle.signal?.addEventListener('abort', abortHandler, { once: true });
+  if (lifecycle.signal?.aborted) abortHandler();
 
   return new Response(stream, {
     status: response.status,

@@ -27,6 +27,7 @@ import {
   WebSearchError,
   normalizeWebSearchOptions,
   prepareWebSearchAgent,
+  shouldUseAutomaticWebSearch,
 } from '../lib/web-search';
 import {
   getNvidiaModelIndex,
@@ -526,11 +527,17 @@ export async function handleChatCompletions(
     if (body.web_search_options.scope != null) searchScope = body.web_search_options.scope;
   }
 
-  // The legacy `web_search` flag is accepted for compatibility but does not
-  // force execution. When a live provider is configured, its tools are exposed
-  // to the selected model and the model decides whether to call them.
+  // Cloudflare models can cheaply decide whether to call the server tools.
+  // NVIDIA requests that plainly do not need fresh information bypass that
+  // blocking, non-streaming planning turn so their answer can stream directly.
   const siteSearchEnabled = body.site_search === true || searchScope === 'site';
-  const webSearchEnabled = !siteSearchEnabled && Boolean(env.TAVILY_API_KEY?.trim() || env.WEBSEARCH || env.SEARXNG_URL);
+  const webSearchConfigured = Boolean(env.TAVILY_API_KEY?.trim() || env.WEBSEARCH || env.SEARXNG_URL);
+  const nvidiaWebSearchRequested = body.web_search === true
+    || body.web_search_options != null
+    || shouldUseAutomaticWebSearch(messages);
+  const webSearchEnabled = !siteSearchEnabled
+    && webSearchConfigured
+    && (!nvidiaProvider || nvidiaWebSearchRequested);
 
   try {
     if (siteSearchEnabled) {
@@ -737,10 +744,31 @@ export async function handleChatCompletions(
 
     if (body.stream === true) {
       if (!nvidiaProvider) quotaObservationAt = new Date();
-      const rawUpstream = nvidiaProvider
-        ? (await requestNvidiaChat(env, model, nvidiaStreamBody(inputs))).body
+      const nvidiaResponse = nvidiaProvider
+        ? await requestNvidiaChat(env, model, nvidiaStreamBody(inputs))
+        : null;
+      const rawUpstream = nvidiaResponse
+        ? nvidiaResponse.body
         : (await env.AI.run(model as any, { ...inputs, stream: true } as any)) as ReadableStream;
       if (!rawUpstream) throw new Error('upstream returned no response body');
+
+      // NVIDIA already speaks OpenAI-compatible SSE. The authenticated
+      // dashboard can relay it verbatim, avoiding a parse/stringify pass for
+      // every generated token. This is important on the Workers Free CPU
+      // budget; the persistent conversation wrapper still validates the
+      // terminal sentinel and saves the completed text.
+      if (nvidiaResponse && trustedAccess) {
+        return new Response(rawUpstream, {
+          headers: {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive',
+            'x-accel-buffering': 'no',
+            ...API_CORS,
+          },
+        });
+      }
+
       const upstream = nvidiaProvider
         ? rawUpstream
         : await preflightCloudflareStream(rawUpstream);
@@ -824,7 +852,14 @@ export async function handleChatCompletions(
     }
     const message = error instanceof Error ? error.message : String(error);
     const status = error instanceof NvidiaApiError ? error.status : 502;
-    return apiError(`Upstream model error: ${message}`, status, 'api_error', 'upstream_error');
+    const code = error instanceof NvidiaApiError ? error.code : 'upstream_error';
+    if (error instanceof NvidiaApiError) {
+      logProviderEvent('nvidia_request_failed', id, model, {
+        phase: body.stream === true ? 'stream' : 'request',
+        reason: code,
+      });
+    }
+    return apiError(`Upstream model error: ${message}`, status, 'api_error', code);
   }
 }
 

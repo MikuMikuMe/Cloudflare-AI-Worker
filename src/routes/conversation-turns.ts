@@ -9,6 +9,11 @@ import {
   CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
   CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
 } from '../lib/cloudflare-usage';
+import {
+  NVIDIA_RESPONSE_TIMEOUT_CODE,
+  NVIDIA_STREAM_TIMEOUT_CODE,
+  NVIDIA_UNAVAILABLE_CODE,
+} from '../lib/nvidia';
 import { wrapPersistedSseResponse, type PersistedAssistantResult } from '../lib/persisted-stream';
 import { json } from '../lib/http';
 import {
@@ -131,6 +136,61 @@ function replayCompletedTurn(
 
 function keepAlive(ctx: ExecutionContext, promise: Promise<unknown>): void {
   ctx.waitUntil(promise.then(() => undefined).catch(() => undefined));
+}
+
+interface TurnSetupDisconnectGuard {
+  isAborted(): Promise<boolean>;
+  handOff(): void;
+  finish(): void;
+}
+
+/** Protect the generating row before the provider has returned stream headers. */
+function protectTurnSetupFromDisconnect(
+  signal: AbortSignal,
+  ctx: ExecutionContext,
+  finalizeInterrupted: () => Promise<void>,
+): TurnSetupDisconnectGuard {
+  let released = false;
+  let settled = false;
+  let abortCleanup: Promise<void> | undefined;
+  let settleLifecycle: () => void = () => undefined;
+  const lifecycle = new Promise<void>((resolve) => {
+    settleLifecycle = resolve;
+  });
+
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    signal.removeEventListener('abort', handleAbort);
+    settleLifecycle();
+  };
+  const handleAbort = (): void => {
+    if (released || abortCleanup) return;
+    abortCleanup = finalizeInterrupted().catch(() => undefined).finally(settle);
+  };
+
+  keepAlive(ctx, lifecycle);
+  signal.addEventListener('abort', handleAbort, { once: true });
+  if (signal.aborted) handleAbort();
+
+  return {
+    async isAborted(): Promise<boolean> {
+      if (!signal.aborted) return false;
+      handleAbort();
+      await abortCleanup;
+      return true;
+    },
+    handOff(): void {
+      released = true;
+      signal.removeEventListener('abort', handleAbort);
+      if (!abortCleanup) settle();
+    },
+    finish(): void {
+      released = true;
+      signal.removeEventListener('abort', handleAbort);
+      if (!abortCleanup) settle();
+    },
+  };
 }
 
 async function safeUpstreamFailure(response: Response): Promise<{ code: string; message: string }> {
@@ -287,11 +347,37 @@ export async function handlePersistentConversationTurn(
     }),
   });
 
+  const disconnectGuard = protectTurnSetupFromDisconnect(request.signal, ctx, async () => {
+    const saved = await finalizeConversationTurn(
+      env.DB,
+      conversationOwner,
+      match[1],
+      body.client_turn_id,
+      {
+        content: '',
+        status: 'interrupted',
+        model: body.model,
+        lastModel: body.model,
+        metadata: {},
+      },
+    );
+    if (!saved || saved.status !== 'interrupted') {
+      throw new Error('disconnected turn changed before finalization');
+    }
+  });
+  if (await disconnectGuard.isAborted()) {
+    return errorResponse('client_disconnected', 'The client disconnected before the response began.', 408);
+  }
+
   const runChat = dependencies.runChat ?? handleChatCompletions;
   let upstream: Response;
   try {
     upstream = await runChat(chatRequest, env, ctx, true);
   } catch {
+    if (await disconnectGuard.isAborted()) {
+      return errorResponse('client_disconnected', 'The client disconnected before the response began.', 408);
+    }
+    disconnectGuard.finish();
     if (!await persistFailedTurn(
       env,
       ctx,
@@ -305,8 +391,12 @@ export async function handlePersistentConversationTurn(
     }
     return errorResponse('upstream_error', 'The model request failed.', 502);
   }
+  if (await disconnectGuard.isAborted()) {
+    return errorResponse('client_disconnected', 'The client disconnected before the response began.', 408);
+  }
   const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
   if (!upstream.ok || !upstream.body || !contentType.includes('text/event-stream')) {
+    disconnectGuard.finish();
     const failure = await safeUpstreamFailure(upstream);
     const providerFallback = providerFallbackFromResponse(upstream, body.model);
     if (!await persistFailedTurn(
@@ -327,7 +417,7 @@ export async function handlePersistentConversationTurn(
   const sameOriginUpstream = sameOriginResponse(upstream);
   const responseFallback = providerFallbackFromResponse(upstream, body.model);
 
-  return wrapPersistedSseResponse(sameOriginUpstream, async (result: PersistedAssistantResult) => {
+  const response = wrapPersistedSseResponse(sameOriginUpstream, async (result: PersistedAssistantResult) => {
     const completionModel = result.model ?? responseFallback?.to ?? body.model;
     const providerFallback = responseFallback ?? (body.model.startsWith('@cf/') && !completionModel.startsWith('@cf/')
       ? {
@@ -336,8 +426,14 @@ export async function handlePersistentConversationTurn(
           reason: CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
         }
       : null);
-    const failureCode = result.errorCode === CLOUDFLARE_NEURONS_EXHAUSTED_CODE
-      || result.errorCode === CLOUDFLARE_PAID_PLAN_REQUIRED_CODE
+    const actionableFailureCodes = new Set([
+      CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+      CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+      NVIDIA_RESPONSE_TIMEOUT_CODE,
+      NVIDIA_STREAM_TIMEOUT_CODE,
+      NVIDIA_UNAVAILABLE_CODE,
+    ]);
+    const failureCode = result.errorCode && actionableFailureCodes.has(result.errorCode)
       ? result.errorCode
       : 'upstream_error';
     const metadata = {
@@ -365,5 +461,10 @@ export async function handlePersistentConversationTurn(
     });
     keepAlive(ctx, persistence);
     await persistence;
-  }, [{ conversation: begun.conversation, choices: [] }]);
+  }, [{ conversation: begun.conversation, choices: [] }], {
+    signal: request.signal,
+    waitUntil: (promise) => keepAlive(ctx, promise),
+  });
+  disconnectGuard.handOff();
+  return response;
 }

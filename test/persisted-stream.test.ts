@@ -65,6 +65,73 @@ test('persists assistant text and safe source metadata before forwarding DONE', 
   });
 });
 
+test('fast NVIDIA delta parsing preserves escaped content exactly', async () => {
+  const calls: PersistedAssistantResult[] = [];
+  const expected = 'line 1\n"quoted" \\ slash 😀';
+  const response = wrapPersistedSseResponse(
+    sseResponse([
+      `data: ${JSON.stringify({ model: 'nvidia/test', choices: [{ delta: { role: 'assistant' } }] })}\n\n`,
+      `data: ${JSON.stringify({ model: 'nvidia/test', choices: [{ delta: { content: expected } }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ]),
+    async (result) => calls.push(result),
+  );
+
+  const output = await response.text();
+  assert.match(output, /data: \[DONE\]/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].status, 'complete');
+  assert.equal(calls[0].text, expected);
+  assert.equal(calls[0].model, 'nvidia/test');
+});
+
+test('flushes a small pending token batch while the provider remains open', async () => {
+  let sendSecond: () => void = () => undefined;
+  const upstream = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"first"}}]}\n\n'));
+        sendSecond = () => {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":" second"}}]}\n\n'));
+        };
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
+  const response = wrapPersistedSseResponse(upstream, async () => undefined);
+  const reader = response.body!.getReader();
+
+  assert.match(new TextDecoder().decode((await reader.read()).value), /first/);
+  sendSecond();
+  const pendingBatch = await Promise.race([
+    reader.read(),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('pending batch was not flushed')), 1_000)),
+  ]);
+  assert.match(new TextDecoder().decode(pendingBatch.value), /second/);
+  await reader.cancel('test complete');
+});
+
+test('preserves actionable errors thrown by a raw provider stream', async () => {
+  const calls: PersistedAssistantResult[] = [];
+  const upstream = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(Object.assign(new Error('NVIDIA stopped sending output.'), {
+          code: 'nvidia_stream_timeout',
+        }));
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
+  const response = wrapPersistedSseResponse(upstream, async (result) => calls.push(result));
+
+  const output = await response.text();
+  assert.match(output, /nvidia_stream_timeout/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].status, 'error');
+  assert.equal(calls[0].errorCode, 'nvidia_stream_timeout');
+});
+
 test('persists an error when the upstream emits an SSE error', async () => {
   const calls: PersistedAssistantResult[] = [];
   const response = wrapPersistedSseResponse(
@@ -152,6 +219,46 @@ test('marks a response interrupted when the browser cancels the stream', async (
   upstreamController = undefined;
 
   assert.equal(cancelled, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].status, 'interrupted');
+  assert.equal(calls[0].text, 'partial');
+});
+
+test('protects disconnect finalization with waitUntil before the request is aborted', async () => {
+  let upstreamCancelled = false;
+  const upstream = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+      },
+      cancel() {
+        upstreamCancelled = true;
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
+  const abortController = new AbortController();
+  const calls: PersistedAssistantResult[] = [];
+  let protectedLifecycle: Promise<void> | undefined;
+  const response = wrapPersistedSseResponse(
+    upstream,
+    async (result) => calls.push(result),
+    [],
+    {
+      signal: abortController.signal,
+      waitUntil(promise) {
+        protectedLifecycle = promise;
+      },
+    },
+  );
+  const reader = response.body!.getReader();
+
+  await reader.read();
+  assert.ok(protectedLifecycle, 'the lifecycle must be protected before a disconnect');
+  abortController.abort('tab closed');
+  await protectedLifecycle;
+
+  assert.equal(upstreamCancelled, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].status, 'interrupted');
   assert.equal(calls[0].text, 'partial');

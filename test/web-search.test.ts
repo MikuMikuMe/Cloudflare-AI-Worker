@@ -3,7 +3,11 @@ import test from 'node:test';
 import { dashboardPage } from '../src/ui/dashboard';
 import { landingPage } from '../src/ui/landing';
 import { handleChatCompletions } from '../src/routes/v1';
-import { prepareWebSearchAgent, WEB_SEARCH_TOOLS } from '../src/lib/web-search';
+import {
+  prepareWebSearchAgent,
+  shouldUseAutomaticWebSearch,
+  WEB_SEARCH_TOOLS,
+} from '../src/lib/web-search';
 
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
@@ -138,6 +142,37 @@ test('a planner input error falls back to a normal answer without searching', as
   } finally {
     restoreFetch();
   }
+});
+
+test('a provider timeout is not repeated as a second non-streaming request', async () => {
+  let calls = 0;
+  const env = environment(async () => {
+    calls += 1;
+    throw Object.assign(new Error('NVIDIA NIM did not begin responding within three minutes.'), {
+      code: 'nvidia_response_timeout',
+    });
+  });
+
+  await assert.rejects(
+    prepareWebSearchAgent(
+      env,
+      [{ role: 'user', content: 'What is current?' }],
+      { messages: [{ role: 'user', content: 'What is current?' }] },
+      { maxNumResults: 5, maxFetchChars: 20_000 },
+      MODEL,
+    ),
+    /did not begin responding/i,
+  );
+  assert.equal(calls, 1);
+});
+
+test('automatic web-search intent keeps casual and coding prompts on the direct stream', () => {
+  assert.equal(shouldUseAutomaticWebSearch([{ role: 'user', content: 'hello' }]), false);
+  assert.equal(shouldUseAutomaticWebSearch([{
+    role: 'user',
+    content: 'write a cpp code and also give me a python equivalent, teach me cpp',
+  }]), false);
+  assert.equal(shouldUseAutomaticWebSearch([{ role: 'user', content: 'What is the latest NVIDIA news today?' }]), true);
 });
 
 for (const model of ['@cf/qwen/qwen3-30b-a3b-fp8', '@cf/nvidia/nemotron-3-120b-a12b']) {

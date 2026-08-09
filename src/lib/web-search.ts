@@ -9,6 +9,8 @@ const DEFAULT_MAX_FETCH_CHARS = 20_000;
 const MAX_FETCH_CHARS = 40_000;
 const MAX_TOOL_ROUNDS = 2;
 
+const LIVE_WEB_INTENT = /\b(?:search(?:\s+the)?\s+web|browse(?:\s+the)?\s+web|look\s+up|find\s+online|online\s+sources?|web\s+sources?|latest|today|tonight|yesterday|tomorrow|current(?:ly)?|recent(?:ly)?|right\s+now|live\s+(?:score|results?|updates?)|news|headlines?|breaking|as\s+of|this\s+(?:week|month|year)|weather|forecast|stock\s+price|exchange\s+rate|standings|schedule|availability|release\s+date|opening\s+hours)\b/i;
+
 export interface WebSearchSource {
   id: string;
   url: string;
@@ -271,6 +273,22 @@ function providerHeaders(apiKey: string | undefined): HeadersInit {
     'user-agent': 'Cloudflare-AI-Worker/2.1 (+https://ai.lofuyu.com)',
     ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
   };
+}
+
+/**
+ * Avoid a blocking model-planning turn for prompts that plainly do not need
+ * fresh information. This matters for external streaming providers: a normal
+ * answer should start streaming immediately instead of being fully generated
+ * inside a non-streaming tool-decision request.
+ */
+export function shouldUseAutomaticWebSearch(messages: ChatMessage[]): boolean {
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+  return typeof latestUserMessage?.content === 'string' && LIVE_WEB_INTENT.test(latestUserMessage.content);
+}
+
+function isToolInputCompatibilityError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:\b8001\b|invalid\s+(?:input|tool|schema)|tool(?:s|_calls?)?.*(?:unsupported|not\s+supported|invalid)|unsupported.*tool)/i.test(message);
 }
 
 function tavilyHeaders(apiKey: string): HeadersInit {
@@ -659,6 +677,7 @@ export async function prepareWebSearchAgent(
       // model without server tools; never turn a schema failure into a forced
       // web search.
       if (usedTool) break;
+      if (!isToolInputCompatibilityError(error)) throw error;
       const directInput: Record<string, unknown> = { ...inputs, messages, stream: false };
       delete directInput.tools;
       delete directInput.tool_choice;

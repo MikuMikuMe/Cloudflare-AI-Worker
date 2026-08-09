@@ -28,6 +28,13 @@ function integer(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : fallback;
 }
 
+function safeUpstreamErrorCode(value: unknown): string {
+  const code = asRecord(value)?.code;
+  return typeof code === 'string' && /^[a-z][a-z0-9_]{0,99}$/.test(code)
+    ? code
+    : 'upstream_error';
+}
+
 export function estimateTextTokens(text: string): number {
   return Math.max(0, Math.ceil(text.length / 4));
 }
@@ -181,7 +188,7 @@ function parseStreamLine(line: string, normalizeCloudflareQuota: boolean): {
       const message = typeof error.message === 'string' && error.message.trim()
         ? `Upstream model error: ${error.message}`
         : 'Upstream model stream failed.';
-      return { error: { message, code: 'upstream_error' } };
+      return { error: { message, code: safeUpstreamErrorCode(error) } };
     }
     return { text: extractText(value) };
   } catch {
@@ -345,7 +352,7 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
             fail(CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE, CLOUDFLARE_PAID_PLAN_REQUIRED_CODE);
           } else {
             const message = error instanceof Error ? error.message : String(error);
-            fail(`Upstream model error: ${message}`);
+            fail(`Upstream model error: ${message}`, safeUpstreamErrorCode(error));
           }
         } finally {
           if (upstreamReader === reader) upstreamReader = null;

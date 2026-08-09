@@ -177,6 +177,7 @@ node_modules/
 dist/
 .npm-cache/
 *.log
+.DS_Store
 
 # Local secrets — never commit
 .dev.vars

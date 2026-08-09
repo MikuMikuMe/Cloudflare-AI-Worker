@@ -3,7 +3,13 @@ import type { Env } from '../types';
 export const NVIDIA_NIM_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 const NVIDIA_MODELS_URL = `${NVIDIA_NIM_BASE_URL}/models`;
 const NVIDIA_FREE_CATALOG_URL = 'https://build.nvidia.com/models?filters=nimType%3Anim_type_preview';
-const REQUEST_TIMEOUT_MS = 15_000;
+const CATALOG_REQUEST_TIMEOUT_MS = 15_000;
+const CHAT_RESPONSE_TIMEOUT_MS = 180_000;
+const CHAT_STREAM_IDLE_TIMEOUT_MS = 180_000;
+
+export const NVIDIA_RESPONSE_TIMEOUT_CODE = 'nvidia_response_timeout';
+export const NVIDIA_STREAM_TIMEOUT_CODE = 'nvidia_stream_timeout';
+export const NVIDIA_UNAVAILABLE_CODE = 'nvidia_unavailable';
 
 export interface NvidiaModelRecord {
   id: string;
@@ -18,6 +24,7 @@ export class NvidiaApiError extends Error {
   constructor(
     message: string,
     public readonly status = 502,
+    public readonly code = 'nvidia_upstream_error',
   ) {
     super(message);
     this.name = 'NvidiaApiError';
@@ -137,8 +144,126 @@ async function responseMessage(response: Response): Promise<string> {
   return text.replace(/\s+/g, ' ').trim().slice(0, 240) || `HTTP ${response.status}`;
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
-  return fetch(input, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs = CATALOG_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  return fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+}
+
+/**
+ * Bound only the wait for response headers. Once NVIDIA has accepted a
+ * streaming request, the response body gets an idle timeout instead of a
+ * fixed total-duration timeout so long answers can continue making progress.
+ */
+async function fetchNvidiaChatResponse(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_RESPONSE_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new NvidiaApiError(
+        'NVIDIA NIM did not begin responding within three minutes.',
+        504,
+        NVIDIA_RESPONSE_TIMEOUT_CODE,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function streamWithIdleTimeout(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let released = false;
+  let finished = false;
+  let lastActivity = Date.now();
+  let timer: number | undefined;
+
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+  };
+
+  const clearTimer = (): void => {
+    if (timer == null) return;
+    clearTimeout(timer);
+    timer = undefined;
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      const scheduleIdleCheck = (delayMs: number): void => {
+        timer = setTimeout(() => {
+          if (finished) return;
+          const remaining = CHAT_STREAM_IDLE_TIMEOUT_MS - (Date.now() - lastActivity);
+          if (remaining > 0) {
+            scheduleIdleCheck(remaining);
+            return;
+          }
+
+          finished = true;
+          const error = new NvidiaApiError(
+            'NVIDIA NIM stopped sending output for three minutes.',
+            504,
+            NVIDIA_STREAM_TIMEOUT_CODE,
+          );
+          void reader.cancel(error).catch(() => undefined).finally(() => {
+            release();
+            controller.error(error);
+          });
+        }, Math.max(1, delayMs));
+      };
+
+      scheduleIdleCheck(CHAT_STREAM_IDLE_TIMEOUT_MS);
+      void (async () => {
+        try {
+          while (!finished) {
+            const step = await reader.read();
+            if (finished) return;
+            if (step.done) {
+              finished = true;
+              clearTimer();
+              release();
+              controller.close();
+              return;
+            }
+            lastActivity = Date.now();
+            controller.enqueue(step.value);
+          }
+        } catch (error) {
+          if (finished) return;
+          finished = true;
+          clearTimer();
+          release();
+          controller.error(error);
+        }
+      })();
+    },
+    async cancel(reason) {
+      if (finished) return;
+      finished = true;
+      clearTimer();
+      try {
+        await reader.cancel(reason);
+      } finally {
+        release();
+      }
+    },
+  });
+}
+
+function withNvidiaChatTimeouts(response: Response): Response {
+  if (!response.body) return response;
+  return new Response(streamWithIdleTimeout(response.body), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export async function fetchNvidiaCallableModels(apiKey: string): Promise<Array<{ id: string; created: number; owned_by: string }>> {
@@ -213,7 +338,7 @@ export async function requestNvidiaChat(
 
   let response: Response;
   try {
-    response = await fetchWithTimeout(`${NVIDIA_NIM_BASE_URL}/chat/completions`, {
+    response = await fetchNvidiaChatResponse(`${NVIDIA_NIM_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         accept: body.stream === true ? 'text/event-stream' : 'application/json',
@@ -222,9 +347,12 @@ export async function requestNvidiaChat(
       },
       body: JSON.stringify({ ...body, model }),
     });
-  } catch {
-    throw new NvidiaApiError('NVIDIA NIM could not be reached.', 502);
+  } catch (error) {
+    if (error instanceof NvidiaApiError) throw error;
+    throw new NvidiaApiError('NVIDIA NIM could not be reached.', 502, NVIDIA_UNAVAILABLE_CODE);
   }
+
+  response = withNvidiaChatTimeouts(response);
 
   if (!response.ok) {
     throw new NvidiaApiError(`NVIDIA NIM returned ${await responseMessage(response)}.`, response.status >= 500 ? 502 : response.status);

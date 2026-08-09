@@ -212,6 +212,9 @@ test('dashboard exposes persistent Chats navigation and conversation API actions
   assert.match(dashboard, /metadata\.site_search/);
   assert.match(dashboard, /failure\.code === 'cloudflare_neurons_exhausted'/);
   assert.match(dashboard, /failure\.code === 'cloudflare_paid_plan_required'/);
+  assert.match(dashboard, /failure\.code === 'nvidia_response_timeout'/);
+  assert.match(dashboard, /failure\.code === 'nvidia_stream_timeout'/);
+  assert.match(dashboard, /failure\.code === 'nvidia_unavailable'/);
   assert.match(dashboard, /gateway will retry Cloudflare shortly/);
   assert.match(dashboard, /responseError\.code = errorBody/);
   assert.match(dashboard, /streamError\.code = event\.error/);

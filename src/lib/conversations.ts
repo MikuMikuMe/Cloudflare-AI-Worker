@@ -97,6 +97,7 @@ interface BeginOptions {
 interface ConversationMessagePageOptions {
   messageLimit?: number;
   beforeSeq?: number | null;
+  now?: number;
 }
 
 const MAX_TITLE_LENGTH = 120;
@@ -110,6 +111,7 @@ const MAX_PAGE_SIZE = 100;
 const DEFAULT_MESSAGE_PAGE_SIZE = 100;
 const MAX_MESSAGE_PAGE_SIZE = 200;
 const STALE_GENERATION_MS = 5 * 60 * 1000;
+const READ_STALE_GENERATION_MS = 30 * 60 * 1000;
 const DEFAULT_CONVERSATION_TITLE = 'New chat';
 
 const CONVERSATION_COLUMNS =
@@ -377,6 +379,20 @@ export async function getConversation(
   if (before != null && (!Number.isInteger(before) || before < 1)) {
     throw new ConversationValidationError('before_seq must be a positive integer.');
   }
+
+  const now = options.now ?? Date.now();
+  await db
+    .prepare(
+      `UPDATE conversation_messages
+          SET status = 'interrupted', completed_at = ?
+        WHERE conversation_id = ? AND role = 'assistant' AND status = 'generating'
+          AND created_at <= ?`,
+    )
+    // Reading should repair truly orphaned rows without interrupting a long,
+    // actively streaming answer. Starting another turn retains the shorter
+    // five-minute recovery window above.
+    .bind(now, id, now - READ_STALE_GENERATION_MS)
+    .run();
 
   const limit = requestedLimit + 1;
   const statement = before == null

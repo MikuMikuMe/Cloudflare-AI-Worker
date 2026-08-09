@@ -1269,6 +1269,15 @@ function messageFailureText(message){
   if (failure.code === 'cloudflare_paid_plan_required') {
     return 'This Workers AI model requires the Workers Paid plan or prepaid AI Gateway credits.';
   }
+  if (failure.code === 'nvidia_response_timeout') {
+    return 'NVIDIA did not begin responding within three minutes. The model may be overloaded; retry or choose another NVIDIA model.';
+  }
+  if (failure.code === 'nvidia_stream_timeout') {
+    return 'NVIDIA stopped sending output for three minutes before the answer completed. Retry or choose another NVIDIA model.';
+  }
+  if (failure.code === 'nvidia_unavailable') {
+    return 'NVIDIA could not be reached for this request. Retry shortly or choose another provider.';
+  }
   return 'This response could not be completed.';
 }
 
