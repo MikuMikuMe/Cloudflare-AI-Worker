@@ -2,7 +2,7 @@ import { estimatePromptTokens, extractText, extractUsage } from './chat';
 import type { ChatMessage, ChatToolCall, Env, Usage } from '../types';
 
 const DEFAULT_SEARCH_MODEL = '@cf/openai/gpt-oss-20b';
-const SEARCH_TIMEOUT_MS = 8_000;
+const SEARCH_TIMEOUT_MS = 20_000;
 const FETCH_TIMEOUT_MS = 8_000;
 const DEFAULT_MAX_RESULTS = 5;
 const DEFAULT_MAX_FETCH_CHARS = 20_000;
@@ -38,7 +38,7 @@ export interface WebSearchAgentResult {
   priorUsage: Usage;
   provider: 'tavily' | 'cloudflare' | 'searxng' | null;
   performed: boolean;
-  /** The first model response when it declined to use a web tool. */
+  /** A complete model response that can be returned without another inference. */
   response?: unknown;
 }
 
@@ -621,7 +621,12 @@ async function executeTool(
 ): Promise<unknown> {
   const args = parseArguments(call.function.arguments);
   if (call.function.name === 'web_search') {
-    const result = await searchWeb(env, asString(args.query), clamp(asInteger(args.max_results, options.maxNumResults), 1, 10));
+    const serverLimit = clamp(options.maxNumResults, 1, 10);
+    const result = await searchWeb(
+      env,
+      asString(args.query),
+      clamp(asInteger(args.max_results, serverLimit), 1, serverLimit),
+    );
     sources.push(...result.results);
     searches.push({ query: result.query, result_count: result.results.length, provider: result.provider });
     return result;
@@ -670,6 +675,7 @@ export async function prepareWebSearchAgent(
   let priorUsage = zeroUsage();
   let usedTool = false;
   let provider: 'tavily' | 'cloudflare' | 'searxng' | null = null;
+  let finalResponse: unknown;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const plannerInput: Record<string, unknown> = {
@@ -698,8 +704,6 @@ export async function prepareWebSearchAgent(
       } catch {
         throw error;
       }
-      const directText = extractText(plannerResponse);
-      priorUsage = addUsage(priorUsage, extractUsage(plannerResponse, estimatePromptTokens(messages), directText));
       return {
         messages,
         sources: [],
@@ -711,7 +715,7 @@ export async function prepareWebSearchAgent(
       };
     }
     const plannerText = extractText(plannerResponse);
-    priorUsage = addUsage(priorUsage, extractUsage(plannerResponse, estimatePromptTokens(agentMessages), plannerText));
+    const plannerUsage = extractUsage(plannerResponse, estimatePromptTokens(agentMessages), plannerText);
     const calls = extractToolCalls(plannerResponse);
 
     if (!calls.length) {
@@ -726,8 +730,12 @@ export async function prepareWebSearchAgent(
           response: plannerResponse,
         };
       }
+      if (plannerText.trim()) finalResponse = plannerResponse;
+      else priorUsage = addUsage(priorUsage, plannerUsage);
       break;
     }
+
+    priorUsage = addUsage(priorUsage, plannerUsage);
 
     agentMessages.push(toolAssistantMessage(calls, plannerText));
     for (const call of calls) {
@@ -755,6 +763,7 @@ export async function prepareWebSearchAgent(
     priorUsage,
     provider,
     performed: true,
+    ...(finalResponse === undefined ? {} : { response: finalResponse }),
   };
 }
 

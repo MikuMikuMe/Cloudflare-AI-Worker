@@ -70,6 +70,10 @@ export function conversationPromptMessages(messages: ConversationMessageRecord[]
     if (message.role === 'assistant' && message.status !== 'complete') continue;
     if (message.role === 'assistant' && !message.content) continue;
     if (message.role === 'user' && message.status !== 'complete') continue;
+    // Failed assistant rows are omitted by the history query. Two adjacent
+    // users therefore mean the older prompt never received a usable answer;
+    // do not let it hijack the next turn's response.
+    if (message.role === 'user' && selected.at(-1)?.role === 'user') continue;
     if (selected.length > 0 && characters + message.content.length > MAX_PROMPT_CHARACTERS) break;
     characters += message.content.length;
     selected.push({ role: message.role, content: message.content });

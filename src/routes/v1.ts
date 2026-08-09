@@ -43,7 +43,7 @@ import {
   resolveEmbeddingModel,
   resolveNvidiaFallbackModel,
 } from '../lib/models';
-import type { ChatCompletionRequest, ChatMessage, ChatToolCall, EmbeddingsRequest, Env } from '../types';
+import type { ChatCompletionRequest, ChatMessage, ChatToolCall, EmbeddingsRequest, Env, Usage } from '../types';
 
 const WEB_SEARCH_INSTANCE = 'lofuyu-web-search';
 const CLOUDFLARE_STREAM_PREFLIGHT_LIMIT = 64 * 1024;
@@ -264,6 +264,14 @@ function bufferedModelStream(value: unknown): ReadableStream<Uint8Array> {
       controller.close();
     },
   });
+}
+
+function addUsage(left: Usage, right: Usage): Usage {
+  return {
+    prompt_tokens: left.prompt_tokens + right.prompt_tokens,
+    completion_tokens: left.completion_tokens + right.completion_tokens,
+    total_tokens: left.total_tokens + right.total_tokens,
+  };
 }
 
 function cloudflareProviderErrorInPrefix(prefix: string): unknown | null {
@@ -661,8 +669,7 @@ export async function handleChatCompletions(
       if (!webAgent.performed) {
         const raw = webAgent.response ?? { response: '' };
         const text = extractText(raw);
-        const usage = webAgent.priorUsage;
-        accountUsage(usage);
+        const usage = addUsage(webAgent.priorUsage, extractUsage(raw, promptTokens, text));
 
         if (body.stream === true) {
           const stream = toOpenAIStream(bufferedModelStream(raw), {
@@ -670,7 +677,8 @@ export async function handleChatCompletions(
             model: responseModel,
             includeUsage: body.stream_options?.include_usage === true,
             promptTokens,
-            onDone: () => undefined,
+            priorUsage: webAgent.priorUsage,
+            onDone: accountUsage,
             onError: accountStreamError,
             normalizeCloudflareQuota: isCloudflareModel(model),
           });
@@ -685,6 +693,7 @@ export async function handleChatCompletions(
           });
         }
 
+        accountUsage(usage);
         return json(buildCompletion(id, responseModel, text, usage, extractToolCalls(raw)), 200, API_CORS);
       }
 
@@ -697,6 +706,46 @@ export async function handleChatCompletions(
         queries: webAgent.searches.map((search) => ({ ...search })),
         sources: webSearchSources,
       };
+
+      if (webAgent.response !== undefined) {
+        const raw = webAgent.response;
+        const text = extractText(raw);
+        const usage = addUsage(webAgent.priorUsage, extractUsage(raw, finalPromptTokens, text));
+
+        if (body.stream === true) {
+          const stream = toOpenAIStream(bufferedModelStream(raw), {
+            id,
+            model: responseModel,
+            includeUsage: body.stream_options?.include_usage === true,
+            promptTokens: finalPromptTokens,
+            priorUsage: webAgent.priorUsage,
+            webSearch,
+            onDone: accountUsage,
+            onError: accountStreamError,
+            normalizeCloudflareQuota: isCloudflareModel(model),
+          });
+          return new Response(stream, {
+            headers: {
+              'content-type': 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache, no-transform',
+              connection: 'keep-alive',
+              'x-accel-buffering': 'no',
+              'x-web-search-provider': webAgent.provider ?? 'unknown',
+              ...API_CORS,
+            },
+          });
+        }
+
+        accountUsage(usage);
+        return json(
+          {
+            ...buildCompletion(id, responseModel, text, usage, extractToolCalls(raw)),
+            web_search: webSearch,
+          },
+          200,
+          API_CORS,
+        );
+      }
 
       if (body.stream === true) {
         if (!nvidiaProvider) quotaObservationAt = new Date();
@@ -737,11 +786,7 @@ export async function handleChatCompletions(
         : (await env.AI.run(model as any, finalInputs as any)) as unknown as Record<string, unknown>;
       const text = extractText(raw);
       const finalUsage = extractUsage(raw, finalPromptTokens, text);
-      const usage = {
-        prompt_tokens: webAgent.priorUsage.prompt_tokens + finalUsage.prompt_tokens,
-        completion_tokens: webAgent.priorUsage.completion_tokens + finalUsage.completion_tokens,
-        total_tokens: webAgent.priorUsage.total_tokens + finalUsage.total_tokens,
-      };
+      const usage = addUsage(webAgent.priorUsage, finalUsage);
       accountUsage(usage);
 
       return json(

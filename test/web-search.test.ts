@@ -5,6 +5,7 @@ import { landingPage } from '../src/ui/landing';
 import { handleChatCompletions } from '../src/routes/v1';
 import {
   prepareWebSearchAgent,
+  searchWeb,
   shouldUseAutomaticWebSearch,
   WEB_SEARCH_TOOLS,
 } from '../src/lib/web-search';
@@ -112,6 +113,77 @@ test('Tavily is the primary provider and receives an advanced search request', a
       include_raw_content: false,
       include_images: false,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Tavily can finish after the legacy eight-second cutoff', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    setTimeout(() => resolve(Response.json({
+      results: [{ url: 'https://example.com/slow-result', title: 'Slow result', content: 'Still valid.' }],
+    })), 9_000);
+  })) as typeof fetch;
+
+  try {
+    const pending = searchWeb(
+      { TAVILY_API_KEY: 'tavily-test-key', WEBSEARCH: undefined, SEARXNG_URL: undefined, SEARXNG_API_KEY: undefined },
+      'a slow but valid search',
+      5,
+    );
+    t.mock.timers.tick(9_000);
+    const result = await pending;
+    assert.equal(result.results[0]?.url, 'https://example.com/slow-result');
+  } finally {
+    globalThis.fetch = originalFetch;
+    t.mock.timers.reset();
+  }
+});
+
+test('the server result limit caps a larger model-requested search', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({
+      results: Array.from({ length: 10 }, (_, index) => ({
+        url: `https://example.com/result-${index + 1}`,
+        title: `Result ${index + 1}`,
+        content: `Evidence ${index + 1}`,
+      })),
+    });
+  }) as typeof fetch;
+
+  try {
+    let modelCalls = 0;
+    const env = environment(async () => {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return {
+          response: '',
+          tool_calls: [{ name: 'web_search', arguments: { query: 'bounded search', max_results: 10 } }],
+        };
+      }
+      return { response: 'Grounded answer' };
+    });
+    env.TAVILY_API_KEY = 'tavily-test-key';
+    env.WEBSEARCH = undefined;
+    env.SEARXNG_URL = undefined;
+
+    const result = await prepareWebSearchAgent(
+      env,
+      [{ role: 'user', content: 'Search for a bounded result set.' }],
+      { messages: [{ role: 'user', content: 'Search for a bounded result set.' }] },
+      { maxNumResults: 5, maxFetchChars: 20_000 },
+      MODEL,
+    );
+
+    assert.equal(capturedBody?.max_results, 5);
+    assert.equal(result.sources.length, 5);
+    assert.equal(result.searches[0]?.result_count, 5);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -334,6 +406,53 @@ test('chat completions execute web tools only after the model calls one', async 
     assert.equal(body.web_search.sources[0].url, 'https://example.com/current-fact');
     assert.ok(calls.length >= 2);
     assert.ok(calls[0].input.tools);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test('a grounded post-search planner answer avoids a redundant final model request', async () => {
+  const restoreFetch = installSearchResponse();
+  try {
+    let modelCalls = 0;
+    const env = environment(async (_model, input) => {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        assert.ok(input.tools);
+        return { response: '', tool_calls: [{ name: 'web_search', arguments: { query: 'current fact' } }] };
+      }
+      if (modelCalls === 2) {
+        assert.ok(input.tools);
+        return {
+          response: 'Grounded answer after search.',
+          usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+        };
+      }
+      throw new Error('redundant final model request');
+    });
+
+    const response = await handleChatCompletions(
+      new Request('https://ai.example.test/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{ role: 'user', content: 'Search for the current fact.' }],
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      }),
+      env,
+      context(),
+      true,
+    );
+
+    assert.equal(response.status, 200);
+    const output = await response.text();
+    assert.match(output, /Grounded answer after search\./);
+    assert.match(output, /"web_search"/);
+    assert.match(output, /data: \[DONE\]/);
+    assert.equal(modelCalls, 2);
   } finally {
     restoreFetch();
   }

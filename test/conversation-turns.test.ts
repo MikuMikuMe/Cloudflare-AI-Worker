@@ -65,6 +65,41 @@ test('working context excludes unfinished assistant placeholders and is bounded'
   assert.equal(prompt.some((message) => message.content === 'unfinished'), false);
 });
 
+test('working context drops an orphaned user prompt after its assistant turn failed', () => {
+  const record = (
+    seq: number,
+    clientTurnId: string,
+    role: 'user' | 'assistant',
+    content: string,
+  ): ConversationMessageRecord => ({
+    id: `message-${seq}`,
+    conversation_id: 'conversation',
+    client_turn_id: clientTurnId,
+    seq,
+    role,
+    content,
+    status: 'complete',
+    model: 'model/test',
+    metadata: null,
+    created_at: seq,
+    completed_at: seq,
+  });
+  // The history query intentionally omits failed assistant rows, so a failed
+  // turn appears here as two consecutive user messages.
+  const prompt = conversationPromptMessages([
+    record(1, 'turn_failed_01', 'user', 'Search for an answer that failed.'),
+    record(3, 'turn_success_02', 'user', 'hi'),
+    record(4, 'turn_success_02', 'assistant', 'Hello!'),
+    record(5, 'turn_current_03', 'user', 'What is next?'),
+  ]);
+
+  assert.deepEqual(prompt, [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'Hello!' },
+    { role: 'user', content: 'What is next?' },
+  ]);
+});
+
 test('stateful turn uses canonical D1 history, commits before DONE, and replays retries', async (t) => {
   const store = await database();
   t.after(store.dispose);

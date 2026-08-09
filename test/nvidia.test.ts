@@ -796,7 +796,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
 
     assert.equal(response.status, 200);
     const body = await response.json() as any;
-    assert.equal(body.choices[0].message.content, 'Grounded NVIDIA answer');
+    assert.equal(body.choices[0].message.content, 'Search complete');
     assert.equal(body.web_search.performed, true);
     assert.equal((plannerTools as any[])[0].type, 'function');
     assert.equal((plannerTools as any[])[0].function.name, 'web_search');
@@ -805,7 +805,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
       force_nonempty_content: true,
     });
     assert.ok(calls.some((url) => url.includes('search.example.test/search')));
-    assert.ok(calls.filter((url) => url.includes('/chat/completions')).length >= 2);
+    assert.equal(calls.filter((url) => url.includes('/chat/completions')).length, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }
