@@ -736,6 +736,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   let plannerTools: unknown;
+  let plannerTemplateKwargs: unknown;
   let plannerTurns = 0;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
@@ -744,6 +745,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
       const requestBody = JSON.parse(String(init?.body));
       if (requestBody.tools) {
         plannerTools = requestBody.tools;
+        plannerTemplateKwargs = requestBody.chat_template_kwargs;
         plannerTurns += 1;
         if (plannerTurns > 1) {
           return Response.json({
@@ -769,7 +771,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
     const env = {
       AI: {},
       AI_SEARCH: undefined,
-      DB: database([{ id: 'google/gemma-4-31b-it', created: 1, owned_by: 'google' }]),
+      DB: database([{ id: 'nvidia/nemotron-3-ultra-550b-a55b', created: 1, owned_by: 'nvidia' }]),
       DEFAULT_MODEL: '@cf/meta/llama-3.1-8b-instruct-fp8',
       NVIDIA_NIM_API_KEY: 'test-nvidia-secret',
       SEARXNG_URL: 'https://search.example.test',
@@ -783,7 +785,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: 'google/gemma-4-31b-it',
+          model: 'nvidia/nemotron-3-ultra-550b-a55b',
           messages: [{ role: 'user', content: 'search when was opus 5 released' }],
         }),
       }),
@@ -798,6 +800,10 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
     assert.equal(body.web_search.performed, true);
     assert.equal((plannerTools as any[])[0].type, 'function');
     assert.equal((plannerTools as any[])[0].function.name, 'web_search');
+    assert.deepEqual(plannerTemplateKwargs, {
+      enable_thinking: true,
+      force_nonempty_content: true,
+    });
     assert.ok(calls.some((url) => url.includes('search.example.test/search')));
     assert.ok(calls.filter((url) => url.includes('/chat/completions')).length >= 2);
   } finally {

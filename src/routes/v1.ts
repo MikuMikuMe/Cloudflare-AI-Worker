@@ -211,9 +211,9 @@ function copyNvidiaInputs(target: Record<string, unknown>, body: ChatCompletionR
   if (typeof body.stop === 'string' || Array.isArray(body.stop)) target.stop = body.stop;
 }
 
-function toNvidiaToolSchema(inputs: Record<string, unknown>): Record<string, unknown> {
+function toNvidiaToolSchema(inputs: Record<string, unknown>, model: string): Record<string, unknown> {
   if (!Array.isArray(inputs.tools)) return inputs;
-  return {
+  const normalized: Record<string, unknown> = {
     ...inputs,
     tools: inputs.tools.flatMap((tool) => {
       if (!tool || typeof tool !== 'object') return [];
@@ -232,11 +232,23 @@ function toNvidiaToolSchema(inputs: Record<string, unknown>): Record<string, unk
       ];
     }),
   };
+  // Nemotron 3 Ultra's Qwen tool-call parser requires these chat-template
+  // flags whenever tools and reasoning are enabled. Without them NVIDIA NIM
+  // rejects the request before inference begins.
+  if (/^nvidia\/nemotron-3-ultra-/i.test(model)) {
+    normalized.chat_template_kwargs = {
+      enable_thinking: true,
+      force_nonempty_content: true,
+    };
+  }
+  return normalized;
 }
 
 function nvidiaRunner(env: Env, model: string) {
-  return async (requestedModel: string, input: Record<string, unknown>): Promise<unknown> =>
-    requestNvidiaJson(env, requestedModel || model, toNvidiaToolSchema(input));
+  return async (requestedModel: string, input: Record<string, unknown>): Promise<unknown> => {
+    const selectedModel = requestedModel || model;
+    return requestNvidiaJson(env, selectedModel, toNvidiaToolSchema(input, selectedModel));
+  };
 }
 
 function nvidiaStreamBody(inputs: Record<string, unknown>): Record<string, unknown> {
