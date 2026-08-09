@@ -20,7 +20,7 @@ function formatter(): FormatterContext {
   return context as unknown as FormatterContext;
 }
 
-test('playground renderer formats common Markdown and links search citations', () => {
+test('chat renderer formats common Markdown and links search citations', () => {
   const format = formatter();
   const sources = format.normaliseSources([
     {
@@ -52,7 +52,7 @@ test('playground renderer formats common Markdown and links search citations', (
   assert.match(html, /&lt;safe&gt;/);
 });
 
-test('playground renderer turns full-width search citations into compact source links', () => {
+test('chat renderer turns full-width search citations into compact source links', () => {
   const format = formatter();
   const sources = format.normaliseSources([
     { url: 'https://example.com/preview', title: 'Preview announcement' },
@@ -74,7 +74,7 @@ test('playground renderer turns full-width search citations into compact source 
   assert.match(html, /<span class="citation" title="Source 3 · cited passage L2">\[3\]<\/span>/);
 });
 
-test('playground renderer accepts paired full-width brackets and digits without rewriting plain text', () => {
+test('chat renderer accepts paired full-width brackets and digits without rewriting plain text', () => {
   const format = formatter();
   const sources = format.normaliseSources([
     { url: 'https://example.com/preview', title: 'Preview announcement' },
@@ -101,7 +101,7 @@ test('playground renderer accepts paired full-width brackets and digits without 
   assert.match(html, /\uFF3Brelease note\uFF3D/);
 });
 
-test('playground renderer escapes model HTML and rejects unsafe links', () => {
+test('chat renderer escapes model HTML and rejects unsafe links', () => {
   const format = formatter();
   const html = format.renderMarkdown(
     '<img src=x onerror=alert(1)> [bad](javascript:alert(1)) https://safe.example/path',
@@ -172,6 +172,40 @@ test('dashboard serves rich answer presentation instead of a plain-text search f
   assert.match(dashboard, /if \(acc && !assistantStored\)/);
   assert.match(dashboard, /controller\.signal\.aborted/);
   assert.doesNotMatch(dashboard, /var footer = 'Web search:/);
+});
+
+test('dashboard exposes persistent Chats navigation and conversation API actions', () => {
+  const dashboard = dashboardPage('user@example.com', 'example.cloudflareaccess.com');
+
+  assert.match(dashboard, /class="tab on" id="tab-chats"[^>]+aria-selected="true"[^>]+data-pane="chats">Chats</);
+  assert.match(dashboard, /class="pane on" id="pane-chats"/);
+  assert.match(dashboard, /event\.key === 'ArrowRight'/);
+  assert.match(dashboard, /class="conversation-sidebar"/);
+  assert.match(dashboard, /Loading conversations…/);
+  assert.match(dashboard, /No saved conversations yet/);
+  assert.match(dashboard, /Could not load conversations/);
+  assert.match(dashboard, /\/admin\/api\/conversations\?limit=30/);
+  assert.match(dashboard, /\/admin\/api\/conversations\//);
+  assert.match(dashboard, /\/turns/);
+  assert.match(dashboard, /client_turn_id/);
+  assert.match(dashboard, /expected_version/);
+  assert.match(dashboard, /last_model/);
+  assert.match(dashboard, /payload\.model = \$\('#model'\)\.value/);
+  assert.match(dashboard, /runConversationMutation/);
+  assert.match(dashboard, /conversationLoading/);
+  assert.match(dashboard, /button\.disabled = Boolean\(activeRequest \|\| conversationMutation \|\| conversationLoading\)/);
+  assert.match(dashboard, /Load older messages/);
+  assert.match(dashboard, /\?message_limit=100&before_seq=/);
+  assert.match(dashboard, /await syncActiveConversation\(true\)/);
+  assert.match(dashboard, /history\.pushState/);
+  assert.match(dashboard, /searchParams\.get\('conversation'\)/);
+  assert.match(dashboard, /normaliseSources\(rawSources\)/);
+  assert.match(dashboard, /metadata\.site_search/);
+  assert.match(dashboard, /window\.addEventListener\('focus', syncFromAnotherDevice\)/);
+  assert.match(dashboard, /visibilitychange/);
+  assert.doesNotMatch(dashboard, />Playground</);
+  assert.doesNotMatch(dashboard, /\/admin\/api\/chat\/completions/);
+  assert.doesNotMatch(dashboard, /body = \{ last_model:/);
 });
 
 test('dashboard emits syntactically valid browser JavaScript', () => {

@@ -123,6 +123,8 @@ function combineUsage(prior: Usage | undefined, promptTokens: number, text: stri
 export function toOpenAIStream(upstream: ReadableStream, options: CompletionOptions): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const created = Math.floor(Date.now() / 1000);
+  let upstreamReader: ReadableStreamDefaultReader | null = null;
+  let cancelled = false;
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -151,10 +153,21 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
 
       void (async () => {
         const reader = upstream.getReader();
+        upstreamReader = reader;
         const decoder = new TextDecoder();
         let buffer = '';
         let text = '';
         let finishedByUpstream = false;
+
+        const fail = (message: string): void => {
+          if (cancelled) return;
+          controller.enqueue(
+            sseLine(encoder, {
+              error: { message, type: 'api_error', code: 'upstream_error' },
+            }),
+          );
+          controller.close();
+        };
 
         const consumeLine = (line: string): boolean => {
           const parsed = parseStreamLine(line);
@@ -174,8 +187,9 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
         };
 
         try {
-          while (true) {
+          while (!cancelled) {
             const { value, done } = await reader.read();
+            if (cancelled) return;
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
@@ -189,8 +203,13 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
             if (finishedByUpstream) break;
           }
 
+          if (cancelled) return;
           buffer += decoder.decode();
-          if (buffer.trim() && !finishedByUpstream) consumeLine(buffer);
+          if (buffer.trim() && !finishedByUpstream) finishedByUpstream = consumeLine(buffer);
+          if (!finishedByUpstream) {
+            fail('Upstream model stream ended before completion.');
+            return;
+          }
 
           const usage = combineUsage(options.priorUsage, options.promptTokens, text);
           controller.enqueue(
@@ -219,18 +238,18 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
           controller.enqueue(doneLine(encoder));
           controller.close();
         } catch (error) {
+          if (cancelled) return;
           const message = error instanceof Error ? error.message : String(error);
-          controller.enqueue(
-            sseLine(encoder, {
-              error: { message: `Upstream model error: ${message}`, type: 'api_error', code: 'upstream_error' },
-            }),
-          );
-          controller.enqueue(doneLine(encoder));
-          controller.close();
+          fail(`Upstream model error: ${message}`);
         } finally {
+          if (upstreamReader === reader) upstreamReader = null;
           reader.releaseLock();
         }
       })();
+    },
+    async cancel(reason) {
+      cancelled = true;
+      if (upstreamReader) await upstreamReader.cancel(reason);
     },
   });
 }

@@ -1,4 +1,4 @@
-/** Authenticated dashboard: key management, streaming playground, usage. */
+/** Authenticated dashboard: key management, persistent chats, usage. */
 
 const STYLES = `
   *{margin:0;padding:0;box-sizing:border-box}
@@ -14,10 +14,11 @@ const STYLES = `
   a.plain{color:var(--muted);text-decoration:none;font-size:12.5px;border:1px solid var(--line);padding:6px 11px;border-radius:7px}
   a.plain:hover{color:var(--fg);border-color:#3a4358}
   .tabs{display:flex;gap:4px;padding:0 22px;background:var(--panel);border-bottom:1px solid var(--line)}
-  .tab{padding:11px 16px;font-size:13.5px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;user-select:none}
+  .tab{padding:11px 16px;font:inherit;font-size:13.5px;color:var(--muted);cursor:pointer;background:transparent;border:0;border-bottom:2px solid transparent;user-select:none}
   .tab:hover{color:var(--fg)}
+  .tab:focus-visible{outline:2px solid var(--accent2);outline-offset:-2px}
   .tab.on{color:var(--fg);border-bottom-color:var(--accent)}
-  main{max-width:1060px;margin:0 auto;padding:26px 22px 70px}
+  main{max-width:1280px;margin:0 auto;padding:26px 22px 70px}
   .pane{display:none}.pane.on{display:block}
   .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
   h2{font-size:17px;font-weight:650;letter-spacing:-.01em}
@@ -27,6 +28,7 @@ const STYLES = `
   .btn:disabled{opacity:.5;cursor:not-allowed}
   .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
   .btn.ghost:hover{color:var(--fg)}
+  .btn.small{padding:6px 10px;font-size:12px}
   .btn.danger{background:transparent;color:var(--bad);border:1px solid #40232a;padding:5px 10px;font-size:12px}
   .btn.danger:hover{background:#2a1418}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
@@ -52,8 +54,33 @@ const STYLES = `
   select,input[type=text],textarea{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--fg);font-size:13.5px;font-family:inherit}
   select option:disabled{color:#667085;background:#11151d}
   select:focus,input:focus,textarea:focus{outline:none;border-color:var(--accent2)}
+  .hidden{display:none!important}
+  .chats-layout{display:grid;grid-template-columns:minmax(220px,270px) minmax(0,1fr);min-height:600px;background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+  .conversation-sidebar{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line);background:#10141c}
+  .conversation-sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px;border-bottom:1px solid var(--line)}
+  .conversation-sidebar-head h3{font-size:13px;font-weight:650}
+  .conversation-list{display:flex;flex-direction:column;gap:3px;padding:8px;overflow-y:auto;min-height:0;max-height:610px}
+  .conversation-item{width:100%;min-width:0;text-align:left;border:1px solid transparent;background:transparent;color:inherit;border-radius:9px;padding:9px 10px;cursor:pointer}
+  .conversation-item:hover{background:#191f2b}.conversation-item.active{background:#1c2638;border-color:#31415d}.conversation-item:disabled{opacity:.55;cursor:not-allowed}
+  .conversation-item-title{display:block;color:#dce2ed;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conversation-item-meta{display:block;color:#707c91;font-size:10.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conversation-list-state{padding:28px 14px;text-align:center;color:var(--muted);font-size:12px;line-height:1.5}
+  .conversation-list-state .btn{margin-top:10px}
+  .conversation-more{margin:0 8px 9px}
+  .chat-main{min-width:0;padding:16px;display:flex;flex-direction:column}
+  .chat-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:13px;flex-wrap:wrap}
+  .chat-title-row{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+  .chat-title-copy{min-width:0}.chat-title-copy h2{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px}
+  .chat-controls{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+  .sidebar-toggle{display:none}
+  .rename-form{display:flex;align-items:center;gap:7px;min-width:min(100%,430px);flex-wrap:wrap}
+  .rename-form input{min-width:0;flex:1 1 180px}
+  .chat-notice{margin:auto;max-width:390px;text-align:center;color:var(--muted);font-size:13px;line-height:1.6;padding:30px}
+  .chat-notice b{display:block;color:var(--fg);font-size:14px;margin-bottom:4px}
+  .chat-notice .btn{margin-top:12px}
+  .history-more{display:flex;justify-content:center;padding:4px 0 12px}
   .chat-wrap{position:relative;margin-bottom:12px}
-  .chat{background:var(--panel);border:1px solid var(--line);border-radius:12px;height:clamp(420px,58vh,640px);overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
+  .chat{background:#111620;border:1px solid var(--line);border-radius:12px;height:clamp(420px,58vh,640px);overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
   .chat-empty{margin:auto;text-align:center;color:var(--muted);font-size:13px;line-height:1.6;padding:30px}
   .chat-empty b{display:block;color:var(--fg);font-size:14px;margin-bottom:3px}
   .msg{max-width:84%;padding:11px 14px;border-radius:12px;font-size:13.5px;line-height:1.65;overflow-wrap:anywhere}
@@ -124,16 +151,22 @@ const STYLES = `
   .cf-usage.setup .cf-usage-value{font-size:16px;color:#ffd28c;letter-spacing:0}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 18px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
   .toast.show{opacity:1}
-  @media(max-width:700px){
+  @media(max-width:780px){
     main{padding:20px 12px 50px}.top,.tabs{padding-left:14px;padding-right:14px}
-    #pane-play>.row>div:last-child{width:100%;flex-wrap:wrap}#model{min-width:0;flex:1}
+    .chats-layout{display:block;min-height:0}.conversation-sidebar{display:none;border-right:0;border-bottom:1px solid var(--line);max-height:45vh}.conversation-sidebar.open{display:flex}
+    .conversation-list{max-height:220px}.sidebar-toggle{display:inline-flex}.chat-main{padding:12px}.chat-title-copy h2{max-width:58vw}
+    .chat-controls{width:100%}#model{min-width:0;flex:1}.rename-form{width:100%}
     .chat{height:55vh;padding:12px}.msg{max-width:94%}.msg.assistant{width:97%;max-width:97%;padding:12px 13px}
     .search-details{padding-left:0}.composer .btn{padding-left:13px;padding-right:13px}
+  }
+  @media(max-width:420px){
+    .chat-title-row{flex-wrap:wrap}.rename-form{display:grid;grid-template-columns:1fr 1fr;width:100%;min-width:0}.rename-form input{grid-column:1/-1;width:100%;min-width:0}
+    .rename-form .btn{min-height:40px}.chat-controls .btn,.sidebar-toggle{min-height:40px}
   }
 `;
 
 /**
- * Small, dependency-free Markdown subset for the authenticated playground.
+ * Small, dependency-free Markdown subset for authenticated Chats.
  * It escapes every model-provided value before adding markup, then allows only
  * the elements emitted below. Exported as source so the exact browser renderer
  * can be exercised in Node tests without maintaining a second implementation.
@@ -169,8 +202,9 @@ function normaliseSources(value){
     var snippet = typeof source.snippet === 'string'
       ? source.snippet.replace(/\s+/g, ' ').trim().slice(0, 600)
       : '';
+    var sourceNumber = Number(source.number);
     result.push({
-      number: index + 1,
+      number: Number.isInteger(sourceNumber) && sourceNumber > 0 ? sourceNumber : index + 1,
       url: href,
       title: title || parsed.hostname.replace(/^www\./, '') || href,
       host: parsed.hostname.replace(/^www\./, ''),
@@ -520,14 +554,14 @@ export function dashboardPage(email: string, teamDomain: string): string {
   </div>
 </div>
 
-<div class="tabs">
-  <div class="tab on" data-pane="keys">API Keys</div>
-  <div class="tab" data-pane="play">Playground</div>
-  <div class="tab" data-pane="usage">Usage</div>
+<div class="tabs" role="tablist" aria-label="Dashboard sections">
+  <button class="tab on" id="tab-chats" type="button" role="tab" aria-selected="true" aria-controls="pane-chats" data-pane="chats">Chats</button>
+  <button class="tab" id="tab-keys" type="button" role="tab" aria-selected="false" aria-controls="pane-keys" data-pane="keys">API Keys</button>
+  <button class="tab" id="tab-usage" type="button" role="tab" aria-selected="false" aria-controls="pane-usage" data-pane="usage">Usage</button>
 </div>
 
 <main>
-  <section class="pane on" id="pane-keys">
+  <section class="pane" id="pane-keys" role="tabpanel" aria-labelledby="tab-keys">
     <div class="row">
       <div><h2>API Keys</h2><div class="hint">Use these as the <code>Authorization: Bearer</code> value with any OpenAI SDK.</div></div>
       <button class="btn" id="new-key">+ Create key</button>
@@ -536,28 +570,56 @@ export function dashboardPage(email: string, teamDomain: string): string {
     <div class="panel"><div id="keys-body"><div class="empty">Loading…</div></div></div>
   </section>
 
-  <section class="pane" id="pane-play">
+  <section class="pane on" id="pane-chats" role="tabpanel" aria-labelledby="tab-chats">
     <div class="row">
-      <div><h2>Playground</h2><div class="hint">Streams through <code>/v1/chat/completions</code> using your Access session — no key needed here.</div></div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <select id="model"></select>
-        <span class="search-status" title="The selected model can call server-managed web tools when needed">Web tools automatic</span>
-        <button class="btn ghost" id="clear">Clear</button>
-      </div>
+      <div><h2>Chats</h2><div class="hint">Your conversations are saved securely and available across signed-in devices.</div></div>
     </div>
-    <div class="chat-wrap">
-      <div class="chat" id="chat" role="log" aria-live="polite" aria-relevant="additions text">
-        <div class="chat-empty"><b>Start a conversation</b>Answers can include formatted text, code, and cited web sources.</div>
+    <div class="chats-layout">
+      <aside class="conversation-sidebar" id="conversation-sidebar" aria-label="Saved conversations">
+        <div class="conversation-sidebar-head">
+          <h3>Conversations</h3>
+          <button class="btn small" id="new-chat" type="button">+ New</button>
+        </div>
+        <div class="conversation-list-state" id="conversation-list-state">Loading conversations…</div>
+        <div class="conversation-list" id="conversation-list" role="list"></div>
+        <button class="btn ghost small conversation-more hidden" id="conversation-more" type="button">Load more</button>
+      </aside>
+      <div class="chat-main">
+        <div class="chat-toolbar">
+          <div class="chat-title-row">
+            <button class="btn ghost small sidebar-toggle" id="conversation-toggle" type="button" aria-expanded="false" aria-controls="conversation-sidebar">Conversations</button>
+            <div class="chat-title-copy" id="chat-title-copy">
+              <h2 id="conversation-title">New chat</h2>
+              <div class="hint" id="conversation-subtitle">Choose a conversation or start a new one.</div>
+            </div>
+            <form class="rename-form hidden" id="rename-form">
+              <input id="rename-title" type="text" maxlength="120" aria-label="Conversation title">
+              <button class="btn small" type="submit">Save</button>
+              <button class="btn ghost small" id="rename-cancel" type="button">Cancel</button>
+            </form>
+          </div>
+          <div class="chat-controls">
+            <select id="model" aria-label="Chat model"></select>
+            <span class="search-status" title="The selected model can call server-managed web tools when needed">Web tools automatic</span>
+            <button class="btn ghost small" id="rename-chat" type="button" disabled>Rename</button>
+            <button class="btn danger" id="delete-chat" type="button" disabled>Delete</button>
+          </div>
+        </div>
+        <div class="chat-wrap">
+          <div class="chat" id="chat" role="log" aria-live="polite" aria-relevant="additions text">
+            <div class="chat-notice"><b>Start a conversation</b>Answers can include formatted text, code, and cited web sources.</div>
+          </div>
+          <button class="jump-latest" id="jump-latest" type="button" aria-label="Jump to the latest message">↓ Latest</button>
+        </div>
+        <div class="composer">
+          <textarea id="prompt" rows="1" placeholder="Ask something… (Enter to send, Shift+Enter for newline)" aria-label="Message"></textarea>
+          <button class="btn" id="send">Send</button>
+        </div>
       </div>
-      <button class="jump-latest" id="jump-latest" type="button" aria-label="Jump to the latest message">↓ Latest</button>
-    </div>
-    <div class="composer">
-      <textarea id="prompt" rows="1" placeholder="Ask something… (Enter to send, Shift+Enter for newline)"></textarea>
-      <button class="btn" id="send">Send</button>
     </div>
   </section>
 
-  <section class="pane" id="pane-usage">
+  <section class="pane" id="pane-usage" role="tabpanel" aria-labelledby="tab-usage">
     <div class="row"><div><h2>Usage</h2><div class="hint">Gateway usage for your keys, plus live Workers AI consumption from Cloudflare.</div></div><button class="btn ghost" id="refresh-usage">Refresh</button></div>
     <div class="cf-usage" id="cloudflare-usage"><div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div><div class="cf-usage-sub">Neurons used today</div></div><div class="cf-usage-value">Loading...</div></div></div>
     <div class="stats" id="stats"></div>
@@ -588,13 +650,33 @@ function fmtNum(n){ return (n || 0).toLocaleString(); }
 ${PLAYGROUND_FORMATTER_SCRIPT}
 
 /* ---------- tabs ---------- */
+function activatePane(name){
+  var tab = document.querySelector('.tab[data-pane="' + name + '"]');
+  var pane = $('#pane-' + name);
+  if (!tab || !pane) return;
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.classList.remove('on');
+    t.setAttribute('aria-selected', 'false');
+  });
+  document.querySelectorAll('.pane').forEach(function(p){ p.classList.remove('on'); });
+  tab.classList.add('on');
+  tab.setAttribute('aria-selected', 'true');
+  pane.classList.add('on');
+  if (name === 'usage') loadUsage();
+}
+
 document.querySelectorAll('.tab').forEach(function(tab){
   tab.onclick = function(){
-    document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('on'); });
-    document.querySelectorAll('.pane').forEach(function(p){ p.classList.remove('on'); });
-    tab.classList.add('on');
-    $('#pane-' + tab.dataset.pane).classList.add('on');
-    if (tab.dataset.pane === 'usage') loadUsage();
+    activatePane(tab.dataset.pane);
+  };
+  tab.onkeydown = function(event){
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    var tabs = Array.from(document.querySelectorAll('.tab'));
+    var direction = event.key === 'ArrowRight' ? 1 : -1;
+    var next = tabs[(tabs.indexOf(tab) + direction + tabs.length) % tabs.length];
+    next.focus();
+    activatePane(next.dataset.pane);
   };
 });
 
@@ -670,13 +752,53 @@ $('#new-key').onclick = function(){
     .catch(function(){ toast('Could not create key'); });
 };
 
-/* ---------- playground ---------- */
+/* ---------- persistent chats ---------- */
 var chatHistory = [];
 var activeRequest = null;
 var autoFollow = true;
+var conversations = [];
+var conversationCursor = null;
+var activeConversation = null;
+var conversationMessages = [];
+var conversationMessageCursor = null;
+var olderMessagesLoading = false;
+var conversationListLoading = false;
+var conversationLoadToken = 0;
+var conversationLoading = false;
+var modelsLoaded = false;
+var pendingModel = '';
+var conversationMutation = null;
+var lastDeviceSync = Date.now();
+
+function renderChatNotice(title, detail, actionLabel, action){
+  var chat = $('#chat');
+  chat.innerHTML = '';
+  var notice = document.createElement('div');
+  notice.className = 'chat-notice';
+  var heading = document.createElement('b');
+  heading.textContent = title;
+  notice.appendChild(heading);
+  var copy = document.createElement('span');
+  copy.textContent = detail || '';
+  notice.appendChild(copy);
+  if (actionLabel && action) {
+    var button = document.createElement('button');
+    button.className = 'btn ghost small';
+    button.type = 'button';
+    button.textContent = actionLabel;
+    button.onclick = action;
+    notice.appendChild(button);
+  }
+  chat.appendChild(notice);
+  autoFollow = true;
+  updateJumpButton();
+}
 
 function renderChatEmpty(){
-  $('#chat').innerHTML = '<div class="chat-empty"><b>Start a conversation</b>Answers can include formatted text, code, and cited web sources.</div>';
+  renderChatNotice(
+    activeConversation ? 'Continue the conversation' : 'Start a conversation',
+    'Answers can include formatted text, code, and cited web sources.'
+  );
 }
 
 function nearChatBottom(){
@@ -705,7 +827,7 @@ $('#chat').addEventListener('scroll', function(){
 $('#jump-latest').onclick = function(){ scrollChat(true); };
 
 function addBubble(role, text){
-  var empty = $('#chat .chat-empty');
+  var empty = $('#chat .chat-empty, #chat .chat-notice');
   if (empty) empty.remove();
   var d = document.createElement('div');
   d.className = 'msg ' + role;
@@ -918,45 +1040,657 @@ function renderAssistant(bubble, text, sources, webSearch, pending){
   scrollChat(false);
 }
 
+/* Conversation API adapters keep the UI independent from harmless envelope additions. */
+function adaptConversation(value){
+  var item = value && typeof value === 'object' ? value : {};
+  var id = typeof item.id === 'string' ? item.id : '';
+  if (!id) return null;
+  var version = Number(item.version);
+  return {
+    id: id,
+    title: typeof item.title === 'string' && item.title.trim() ? item.title.trim().slice(0, 120) : 'New chat',
+    last_model: typeof item.last_model === 'string' ? item.last_model : (typeof item.model === 'string' ? item.model : ''),
+    version: Number.isFinite(version) && version >= 0 ? version : 0,
+    created_at: Number(item.created_at) || 0,
+    updated_at: Number(item.updated_at) || Number(item.created_at) || 0
+  };
+}
+
+function adaptConversationPage(value){
+  var body = value && typeof value === 'object' ? value : {};
+  var rawItems = Array.isArray(body.items) ? body.items
+    : (Array.isArray(body.conversations) ? body.conversations : (Array.isArray(body.data) ? body.data : []));
+  return {
+    items: rawItems.map(adaptConversation).filter(Boolean),
+    nextCursor: typeof body.next_cursor === 'string' && body.next_cursor ? body.next_cursor : null
+  };
+}
+
+function adaptConversationEnvelope(value){
+  var body = value && typeof value === 'object' ? value : {};
+  return adaptConversation(body.conversation || body.data || body);
+}
+
+function adaptMessage(value){
+  var item = value && typeof value === 'object' ? value : {};
+  var seq = Number(item.seq);
+  return {
+    id: typeof item.id === 'string' ? item.id : '',
+    seq: Number.isFinite(seq) ? seq : 0,
+    role: item.role === 'user' ? 'user' : (item.role === 'assistant' ? 'assistant' : String(item.role || '')),
+    content: typeof item.content === 'string' ? item.content : '',
+    status: typeof item.status === 'string' ? item.status : 'complete',
+    model: typeof item.model === 'string' ? item.model : '',
+    metadata: item.metadata,
+    created_at: Number(item.created_at) || 0,
+    completed_at: Number(item.completed_at) || 0
+  };
+}
+
+function adaptConversationDetail(value){
+  var body = value && typeof value === 'object' ? value : {};
+  var rawMessages = Array.isArray(body.messages) ? body.messages
+    : (body.data && Array.isArray(body.data.messages) ? body.data.messages : []);
+  return {
+    conversation: adaptConversation(body.conversation || (body.data && body.data.conversation) || body),
+    messages: rawMessages.map(adaptMessage).filter(function(message){
+      return message.role === 'user' || message.role === 'assistant';
+    }).sort(function(a, b){ return a.seq - b.seq || a.created_at - b.created_at; }),
+    nextBeforeSeq: Number.isInteger(Number(body.next_before_seq)) && Number(body.next_before_seq) > 0
+      ? Number(body.next_before_seq)
+      : null
+  };
+}
+
+async function conversationApi(path, init){
+  var response = await fetch(path, init);
+  var data = {};
+  if (response.status !== 204) {
+    var raw = await response.text();
+    if (raw) {
+      try { data = JSON.parse(raw); }
+      catch(e) { data = { message: raw.slice(0, 300) }; }
+    }
+  }
+  if (!response.ok) {
+    var message = data && ((data.error && data.error.message) || data.message || data.error);
+    var error = new Error(typeof message === 'string' ? message : 'Request failed (' + response.status + ')');
+    error.status = response.status;
+    error.code = data && (data.code || (data.error && data.error.code));
+    throw error;
+  }
+  return data;
+}
+
+function conversationTimestamp(value){
+  var timestamp = Number(value) || 0;
+  return timestamp > 0 && timestamp < 100000000000 ? timestamp * 1000 : timestamp;
+}
+
+function conversationFromList(id){
+  return conversations.find(function(item){ return item.id === id; }) || null;
+}
+
+function upsertConversation(conversation, placeFirst){
+  if (!conversation) return;
+  conversations = conversations.filter(function(item){ return item.id !== conversation.id; });
+  if (placeFirst) conversations.unshift(conversation);
+  else conversations.push(conversation);
+  conversations.sort(function(a, b){
+    return conversationTimestamp(b.updated_at) - conversationTimestamp(a.updated_at) || b.id.localeCompare(a.id);
+  });
+}
+
+function renderConversationListState(message, actionLabel, action){
+  var state = $('#conversation-list-state');
+  state.innerHTML = '';
+  state.classList.remove('hidden');
+  var copy = document.createElement('div');
+  copy.textContent = message;
+  state.appendChild(copy);
+  if (actionLabel && action) {
+    var button = document.createElement('button');
+    button.className = 'btn ghost small';
+    button.type = 'button';
+    button.textContent = actionLabel;
+    button.onclick = action;
+    state.appendChild(button);
+  }
+}
+
+function renderConversationList(){
+  var list = $('#conversation-list');
+  list.innerHTML = '';
+  if (!conversations.length) {
+    renderConversationListState('No saved conversations yet.');
+  } else {
+    $('#conversation-list-state').classList.add('hidden');
+    conversations.forEach(function(conversation){
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'conversation-item' + (activeConversation && activeConversation.id === conversation.id ? ' active' : '');
+      button.disabled = Boolean(activeRequest || conversationMutation || conversationLoading);
+      button.setAttribute('role', 'listitem');
+      if (activeConversation && activeConversation.id === conversation.id) button.setAttribute('aria-current', 'true');
+      var title = document.createElement('span');
+      title.className = 'conversation-item-title';
+      title.textContent = conversation.title;
+      button.appendChild(title);
+      var meta = document.createElement('span');
+      meta.className = 'conversation-item-meta';
+      var pieces = [];
+      if (conversation.last_model) pieces.push(conversation.last_model.replace('@cf/', ''));
+      if (conversation.updated_at) pieces.push(new Date(conversationTimestamp(conversation.updated_at)).toLocaleDateString());
+      meta.textContent = pieces.join(' · ') || 'Saved chat';
+      button.appendChild(meta);
+      button.onclick = function(){ openConversation(conversation.id, 'push'); };
+      list.appendChild(button);
+    });
+  }
+  var more = $('#conversation-more');
+  more.classList.toggle('hidden', !conversationCursor);
+  more.disabled = Boolean(conversationListLoading || activeRequest || conversationMutation || conversationLoading);
+}
+
+function updateConversationHeader(){
+  var title = activeConversation ? activeConversation.title : 'New chat';
+  $('#conversation-title').textContent = title;
+  $('#conversation-subtitle').textContent = activeConversation
+    ? 'Saved across your signed-in devices.'
+    : 'Choose a conversation or start a new one.';
+  $('#rename-chat').disabled = !activeConversation || Boolean(activeRequest) || Boolean(conversationMutation) || conversationLoading;
+  $('#delete-chat').disabled = !activeConversation || Boolean(activeRequest) || Boolean(conversationMutation) || conversationLoading;
+  renderConversationList();
+}
+
+function setChatBusy(busy){
+  $('#send').disabled = busy;
+  $('#model').disabled = busy;
+  $('#new-chat').disabled = busy;
+  $('#rename-chat').disabled = busy || !activeConversation;
+  $('#delete-chat').disabled = busy || !activeConversation;
+  document.querySelectorAll('.conversation-item').forEach(function(item){ item.disabled = busy; });
+  $('#conversation-more').disabled = busy || conversationListLoading;
+  var historyMore = $('#history-more');
+  if (historyMore) historyMore.disabled = busy || olderMessagesLoading;
+  $('#chat').setAttribute('aria-busy', busy ? 'true' : 'false');
+}
+
+function refreshChatBusy(){
+  setChatBusy(Boolean(activeRequest || conversationMutation || conversationLoading));
+}
+
+async function runConversationMutation(operation){
+  if (conversationMutation) return null;
+  var mutation = Promise.resolve().then(operation);
+  conversationMutation = mutation;
+  refreshChatBusy();
+  try {
+    return await mutation;
+  } finally {
+    if (conversationMutation === mutation) conversationMutation = null;
+    refreshChatBusy();
+  }
+}
+
+function messageMetadata(value){
+  if (value && typeof value === 'object') return value;
+  if (typeof value === 'string' && value) {
+    try {
+      var parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch(e) {}
+  }
+  return {};
+}
+
+function messageSearchPresentation(message){
+  var metadata = messageMetadata(message.metadata);
+  var webSearch = metadata.web_search && typeof metadata.web_search === 'object'
+    ? metadata.web_search
+    : (metadata.site_search && typeof metadata.site_search === 'object'
+      ? metadata.site_search
+      : (metadata.webSearch && typeof metadata.webSearch === 'object' ? metadata.webSearch : null));
+  var rawSources = webSearch && Array.isArray(webSearch.sources) ? webSearch.sources
+    : (Array.isArray(metadata.sources) ? metadata.sources : []);
+  var sources = normaliseSources(rawSources);
+  if (!webSearch && sources.length) {
+    webSearch = { performed: true, provider: metadata.provider || 'web', queries: [], sources: rawSources };
+  }
+  return { webSearch: webSearch, sources: sources };
+}
+
+function renderConversationMessages(messages, nextBeforeSeq, preservePosition){
+  var chat = $('#chat');
+  var oldHeight = chat.scrollHeight;
+  var oldTop = chat.scrollTop;
+  chat.innerHTML = '';
+  chatHistory = [];
+  conversationMessages = messages.slice();
+  conversationMessageCursor = nextBeforeSeq || null;
+  if (!messages.length) {
+    renderChatEmpty();
+    return;
+  }
+  if (conversationMessageCursor) {
+    var older = document.createElement('div');
+    older.className = 'history-more';
+    var olderButton = document.createElement('button');
+    olderButton.className = 'btn ghost small';
+    olderButton.id = 'history-more';
+    olderButton.type = 'button';
+    olderButton.textContent = olderMessagesLoading ? 'Loading…' : 'Load older messages';
+    olderButton.disabled = olderMessagesLoading || Boolean(activeRequest) || conversationLoading;
+    olderButton.onclick = loadOlderMessages;
+    older.appendChild(olderButton);
+    chat.appendChild(older);
+  }
+  messages.forEach(function(message){
+    if (message.role !== 'user' && message.role !== 'assistant') return;
+    var bubble = addBubble(message.role, message.content);
+    chatHistory.push({ role: message.role, content: message.content });
+    if (message.role === 'assistant') {
+      var presentation = messageSearchPresentation(message);
+      renderAssistant(bubble, message.content, presentation.sources, presentation.webSearch, false);
+      if (message.status === 'pending' || message.status === 'streaming' || message.status === 'generating') {
+        messageStatus(bubble, 'Response is still being prepared…', '', true);
+      } else if (message.status === 'interrupted') {
+        messageStatus(bubble, 'This response was interrupted. Send a new message to continue.', 'error', false);
+      } else if (message.status === 'failed' || message.status === 'error') {
+        messageStatus(bubble, 'This response could not be completed.', 'error', false);
+      }
+    }
+  });
+  if (preservePosition) {
+    autoFollow = false;
+    requestAnimationFrame(function(){
+      chat.scrollTop = Math.max(0, chat.scrollHeight - oldHeight + oldTop);
+      updateJumpButton();
+    });
+  } else {
+    scrollChat(true);
+  }
+}
+
+async function loadOlderMessages(){
+  if (!activeConversation || !conversationMessageCursor || olderMessagesLoading || activeRequest) return;
+  var id = activeConversation.id;
+  var before = conversationMessageCursor;
+  olderMessagesLoading = true;
+  var button = $('#history-more');
+  if (button) { button.disabled = true; button.textContent = 'Loading…'; }
+  try {
+    var detail = adaptConversationDetail(await conversationApi(
+      '/admin/api/conversations/' + encodeURIComponent(id) + '?message_limit=100&before_seq=' + encodeURIComponent(before)
+    ));
+    if (!activeConversation || activeConversation.id !== id) return;
+    var seen = new Set();
+    var combined = detail.messages.concat(conversationMessages).filter(function(message){
+      var key = message.id || String(message.seq) + ':' + message.role;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort(function(a, b){ return a.seq - b.seq || a.created_at - b.created_at; });
+    renderConversationMessages(combined, detail.nextBeforeSeq, true);
+  } catch(error) {
+    toast(error && error.message ? error.message : 'Could not load older messages');
+  } finally {
+    olderMessagesLoading = false;
+    var current = $('#history-more');
+    if (current) { current.disabled = false; current.textContent = 'Load older messages'; }
+  }
+}
+
+function conversationIdFromUrl(){
+  try { return new URL(location.href).searchParams.get('conversation') || ''; }
+  catch(e) { return ''; }
+}
+
+function updateConversationUrl(id, mode){
+  try {
+    var url = new URL(location.href);
+    if (id) url.searchParams.set('conversation', id);
+    else url.searchParams.delete('conversation');
+    if (mode === 'push') history.pushState({ conversation: id || null }, '', url.pathname + url.search + url.hash);
+    else history.replaceState({ conversation: id || null }, '', url.pathname + url.search + url.hash);
+  } catch(e) {}
+}
+
+function closeConversationSidebar(){
+  $('#conversation-sidebar').classList.remove('open');
+  $('#conversation-toggle').setAttribute('aria-expanded', 'false');
+}
+
+function applyConversationModel(model){
+  if (!model) return;
+  pendingModel = model;
+  if (!modelsLoaded) return;
+  var option = Array.from($('#model').options).find(function(item){ return item.value === model; });
+  if (option) {
+    $('#model').value = model;
+    pendingModel = '';
+  }
+}
+
+async function openConversation(id, navigationMode){
+  if (!id) return;
+  if (activeRequest) {
+    toast('Wait for the current response before switching conversations');
+    if (activeConversation) updateConversationUrl(activeConversation.id, 'replace');
+    return;
+  }
+  closeRenameForm();
+  var token = ++conversationLoadToken;
+  conversationLoading = true;
+  refreshChatBusy();
+  if (navigationMode) updateConversationUrl(id, navigationMode);
+  renderChatNotice('Loading conversation…', 'Fetching the latest saved messages.');
+  $('#conversation-title').textContent = (conversationFromList(id) || {}).title || 'Loading…';
+  try {
+    var detail = adaptConversationDetail(await conversationApi('/admin/api/conversations/' + encodeURIComponent(id)));
+    if (token !== conversationLoadToken) return;
+    if (!detail.conversation) throw new Error('Conversation data was incomplete.');
+    activeConversation = detail.conversation;
+    upsertConversation(activeConversation, false);
+    applyConversationModel(activeConversation.last_model);
+    updateConversationHeader();
+    renderConversationMessages(detail.messages, detail.nextBeforeSeq, false);
+    closeConversationSidebar();
+  } catch(error) {
+    if (token !== conversationLoadToken) return;
+    activeConversation = null;
+    updateConversationHeader();
+    renderChatNotice(
+      error && error.status === 404 ? 'Conversation not found' : 'Could not load this conversation',
+      error && error.message ? error.message : 'Please try again.',
+      'Retry',
+      function(){ openConversation(id, 'replace'); }
+    );
+  } finally {
+    if (token === conversationLoadToken) {
+      conversationLoading = false;
+      refreshChatBusy();
+    }
+  }
+}
+
+async function loadConversations(reset, chooseInitial, quiet){
+  if (conversationListLoading) return;
+  conversationListLoading = true;
+  if (reset) {
+    conversationCursor = null;
+    if (!quiet) {
+      conversations = [];
+      renderConversationListState('Loading conversations…');
+    }
+  }
+  $('#conversation-more').disabled = true;
+  try {
+    var path = '/admin/api/conversations?limit=30';
+    if (!reset && conversationCursor) path += '&cursor=' + encodeURIComponent(conversationCursor);
+    var page = adaptConversationPage(await conversationApi(path));
+    if (reset && quiet) conversations = [];
+    page.items.forEach(function(item){ upsertConversation(item, false); });
+    conversationCursor = page.nextCursor;
+    renderConversationList();
+    if (chooseInitial) {
+      var linked = conversationIdFromUrl();
+      if (linked) {
+        activatePane('chats');
+        await openConversation(linked, 'replace');
+      } else if (!activeConversation && conversations.length) {
+        await openConversation(conversations[0].id, 'replace');
+      } else if (!conversations.length) {
+        activeConversation = null;
+        updateConversationHeader();
+        renderChatEmpty();
+      }
+    }
+  } catch(error) {
+    if (!conversations.length) {
+      renderConversationListState('Could not load conversations.', 'Retry', function(){ loadConversations(true, true, false); });
+    } else {
+      toast('Could not refresh conversations');
+    }
+  } finally {
+    conversationListLoading = false;
+    $('#conversation-more').disabled = false;
+  }
+}
+
+async function createConversation(){
+  if ($('#new-chat').disabled) return null;
+  try {
+    var payload = {};
+    if ($('#model').value) payload.model = $('#model').value;
+    var created = await runConversationMutation(function(){
+      return conversationApi('/admin/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    });
+    var conversation = adaptConversationEnvelope(created);
+    if (!conversation) throw new Error('Conversation data was incomplete.');
+    activeConversation = conversation;
+    chatHistory = [];
+    conversationMessages = [];
+    conversationMessageCursor = null;
+    upsertConversation(conversation, true);
+    applyConversationModel(conversation.last_model);
+    updateConversationUrl(conversation.id, 'push');
+    updateConversationHeader();
+    renderChatEmpty();
+    closeConversationSidebar();
+    return conversation;
+  } catch(error) {
+    toast(error && error.message ? error.message : 'Could not create conversation');
+    return null;
+  }
+}
+
+async function syncActiveConversation(renderMessages){
+  var id = activeConversation && activeConversation.id;
+  if (!id) return false;
+  try {
+    var detail = adaptConversationDetail(await conversationApi('/admin/api/conversations/' + encodeURIComponent(id)));
+    if (!activeConversation || activeConversation.id !== id || !detail.conversation) return false;
+    activeConversation = detail.conversation;
+    upsertConversation(activeConversation, true);
+    applyConversationModel(activeConversation.last_model);
+    updateConversationHeader();
+    if (renderMessages) renderConversationMessages(detail.messages, detail.nextBeforeSeq, false);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+async function syncFromAnotherDevice(){
+  if (document.hidden || activeRequest || conversationMutation || conversationLoading) return;
+  if (!$('#rename-form').classList.contains('hidden')) return;
+  var now = Date.now();
+  if (now - lastDeviceSync < 5000) return;
+  lastDeviceSync = now;
+  var before = activeConversation && {
+    id: activeConversation.id,
+    version: activeConversation.version,
+    updated_at: activeConversation.updated_at,
+    model: activeConversation.last_model
+  };
+  var selectedModel = $('#model').value;
+  var preserveModel = Boolean(before && selectedModel && selectedModel !== before.model);
+  var previousScroll = $('#chat').scrollTop;
+  var preserveScroll = !autoFollow;
+  await loadConversations(true, false, true);
+  if (!before) return;
+  var remote = conversationFromList(before.id);
+  if (!remote) {
+    activeConversation = null;
+    chatHistory = [];
+    conversationMessages = [];
+    conversationMessageCursor = null;
+    updateConversationUrl('', 'replace');
+    updateConversationHeader();
+    if (conversations.length) await openConversation(conversations[0].id, 'replace');
+    else renderChatEmpty();
+    toast('This conversation was deleted on another device');
+    return;
+  }
+  if (remote.version === before.version && remote.updated_at === before.updated_at) return;
+  await openConversation(before.id, null);
+  if (preserveModel) {
+    var option = Array.from($('#model').options).find(function(item){ return item.value === selectedModel && !item.disabled; });
+    if (option) $('#model').value = selectedModel;
+  }
+  if (preserveScroll) {
+    $('#chat').scrollTop = previousScroll;
+    autoFollow = false;
+    updateJumpButton();
+  }
+}
+
 function loadModels(){
   fetch('/v1/models').then(function(r){ return r.json(); }).then(function(d){
-  var sel = $('#model');
-  sel.innerHTML = '';
-  (d.data || []).filter(function(m){ return m.id.indexOf('bge') === -1 && m.id.indexOf('embedding') === -1; })
-    .forEach(function(m){
-      var o = document.createElement('option');
-      o.value = m.id;
-      o.disabled = m.disabled === true;
-      o.textContent = (m.provider === 'nvidia' ? 'NVIDIA · ' : '') + m.id.replace('@cf/', '')
-        + (o.disabled ? ' · Cloudflare neurons exhausted' : '');
-      sel.appendChild(o);
-    });
-  var firstEnabled = sel.querySelector('option:not([disabled])');
-  if (firstEnabled) sel.value = firstEnabled.value;
+    var sel = $('#model');
+    var previous = pendingModel || (activeConversation && activeConversation.last_model) || sel.value;
+    sel.innerHTML = '';
+    (d.data || []).filter(function(m){ return m.id.indexOf('bge') === -1 && m.id.indexOf('embedding') === -1; })
+      .forEach(function(m){
+        var o = document.createElement('option');
+        o.value = m.id;
+        o.disabled = m.disabled === true;
+        o.textContent = (m.provider === 'nvidia' ? 'NVIDIA · ' : '') + m.id.replace('@cf/', '')
+          + (o.disabled ? ' · Cloudflare neurons exhausted' : '');
+        sel.appendChild(o);
+      });
+    modelsLoaded = true;
+    var saved = Array.from(sel.options).find(function(option){ return option.value === previous; });
+    var firstEnabled = sel.querySelector('option:not([disabled])');
+    if (saved) sel.value = saved.value;
+    else if (firstEnabled) sel.value = firstEnabled.value;
+    pendingModel = '';
   }).catch(function(){ $('#model').innerHTML = '<option value="">Models unavailable</option>'; });
 }
 
 loadModels();
+loadConversations(true, true, false);
 
-$('#clear').onclick = function(){
-  if (activeRequest) activeRequest.controller.abort();
-  activeRequest = null;
-  chatHistory = [];
-  autoFollow = true;
-  renderChatEmpty();
-  $('#send').disabled = false;
-  $('#model').disabled = false;
-  $('#chat').setAttribute('aria-busy', 'false');
-  updateJumpButton();
+$('#conversation-more').onclick = function(){ loadConversations(false, false, false); };
+$('#new-chat').onclick = function(){ createConversation(); };
+$('#conversation-toggle').onclick = function(){
+  var sidebar = $('#conversation-sidebar');
+  var open = !sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', open);
+  this.setAttribute('aria-expanded', open ? 'true' : 'false');
 };
+
+$('#rename-chat').onclick = function(){
+  if (!activeConversation || activeRequest) return;
+  $('#chat-title-copy').classList.add('hidden');
+  $('#rename-form').classList.remove('hidden');
+  $('#rename-title').value = activeConversation.title;
+  $('#rename-title').focus();
+  $('#rename-title').select();
+};
+
+function closeRenameForm(){
+  $('#rename-form').classList.add('hidden');
+  $('#chat-title-copy').classList.remove('hidden');
+}
+
+$('#rename-cancel').onclick = closeRenameForm;
+$('#rename-form').onsubmit = async function(event){
+  event.preventDefault();
+  if (!activeConversation) return;
+  var title = $('#rename-title').value.trim();
+  if (!title) { toast('Enter a conversation title'); return; }
+  var id = activeConversation.id;
+  var body = { title: title };
+  if (Number.isFinite(activeConversation.version)) body.expected_version = activeConversation.version;
+  this.querySelectorAll('button,input').forEach(function(control){ control.disabled = true; });
+  try {
+    var response = await runConversationMutation(function(){
+      return conversationApi('/admin/api/conversations/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    });
+    var updated = adaptConversationEnvelope(response);
+    if (!updated) throw new Error('Conversation data was incomplete.');
+    if (activeConversation && activeConversation.id === id) activeConversation = updated;
+    upsertConversation(updated, true);
+    closeRenameForm();
+    updateConversationHeader();
+    toast('Conversation renamed');
+  } catch(error) {
+    toast(error && error.message ? error.message : 'Could not rename conversation');
+    if (error && error.status === 409) syncActiveConversation();
+  } finally {
+    this.querySelectorAll('button,input').forEach(function(control){ control.disabled = false; });
+  }
+};
+
+$('#delete-chat').onclick = async function(){
+  if (!activeConversation || activeRequest) return;
+  var conversation = activeConversation;
+  if (!confirm('Delete “' + conversation.title + '” and all of its messages? This cannot be undone.')) return;
+  this.disabled = true;
+  try {
+    await runConversationMutation(function(){
+      return conversationApi('/admin/api/conversations/' + encodeURIComponent(conversation.id), { method: 'DELETE' });
+    });
+    conversations = conversations.filter(function(item){ return item.id !== conversation.id; });
+    activeConversation = null;
+    chatHistory = [];
+    conversationMessages = [];
+    conversationMessageCursor = null;
+    updateConversationUrl('', 'replace');
+    updateConversationHeader();
+    if (conversations.length) await openConversation(conversations[0].id, 'replace');
+    else renderChatEmpty();
+    toast('Conversation deleted');
+    loadConversations(true, false, true);
+  } catch(error) {
+    toast(error && error.message ? error.message : 'Could not delete conversation');
+  } finally {
+    this.disabled = !activeConversation;
+  }
+};
+
+window.addEventListener('popstate', function(){
+  var id = conversationIdFromUrl();
+  if (id) {
+    activatePane('chats');
+    openConversation(id, null);
+  } else {
+    activeConversation = null;
+    chatHistory = [];
+    conversationMessages = [];
+    conversationMessageCursor = null;
+    updateConversationHeader();
+    renderChatEmpty();
+  }
+});
+
+window.addEventListener('focus', syncFromAnotherDevice);
+document.addEventListener('visibilitychange', function(){
+  if (!document.hidden) syncFromAnotherDevice();
+});
 
 async function send(){
   if ($('#send').disabled) return;
   var text = $('#prompt').value.trim();
   if (!text) return;
   if (!$('#model').value) { toast('Choose an available model first'); return; }
+  var selectedOption = $('#model').selectedOptions && $('#model').selectedOptions[0];
+  if (selectedOption && selectedOption.disabled) { toast('Choose an available model first'); return; }
+  if (!activeConversation && !(await createConversation())) return;
+  var conversation = activeConversation;
+  if (!conversation) return;
   $('#prompt').value = ''; $('#prompt').style.height = 'auto';
-  addBubble('user', text);
+  var userBubble = addBubble('user', text);
   chatHistory.push({ role: 'user', content: text });
 
   var out = addBubble('assistant', '');
@@ -967,11 +1701,9 @@ async function send(){
   var assistantStored = false;
   var renderFrame = 0;
   var controller = new AbortController();
-  var request = { controller: controller, bubble: out };
+  var request = { controller: controller, bubble: out, conversationId: conversation.id };
   activeRequest = request;
-  $('#send').disabled = true;
-  $('#model').disabled = true;
-  $('#chat').setAttribute('aria-busy', 'true');
+  refreshChatBusy();
   renderAssistant(out, acc, sources, webSearch, pending);
 
   function scheduleRender(){
@@ -989,6 +1721,14 @@ async function send(){
   }
 
   function handleStreamEvent(event){
+    if (event.conversation) {
+      var streamedConversation = adaptConversation(event.conversation);
+      if (streamedConversation && activeConversation && activeConversation.id === streamedConversation.id) {
+        activeConversation = streamedConversation;
+        upsertConversation(streamedConversation, true);
+        updateConversationHeader();
+      }
+    }
     if (event.web_search) {
       webSearch = event.web_search;
       if (Array.isArray(event.web_search.sources)) sources = normaliseSources(event.web_search.sources);
@@ -1002,17 +1742,25 @@ async function send(){
   }
 
   try {
-    var res = await fetch('/admin/api/chat/completions', {
+    var turnBody = {
+      content: text,
+      model: $('#model').value,
+      client_turn_id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random().toString(16).slice(2),
+      expected_version: conversation.version
+    };
+    var res = await fetch('/admin/api/conversations/' + encodeURIComponent(conversation.id) + '/turns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: $('#model').value, messages: chatHistory, stream: true }),
+      body: JSON.stringify(turnBody),
       signal: controller.signal
     });
     if (!res.ok) {
       var errorBody = null;
       try { errorBody = await res.json(); } catch(e) {}
       var errorMessage = errorBody && ((errorBody.error && errorBody.error.message) || errorBody.message || errorBody.error);
-      throw new Error(typeof errorMessage === 'string' ? errorMessage : 'Request failed (' + res.status + ')');
+      var responseError = new Error(typeof errorMessage === 'string' ? errorMessage : 'Request failed (' + res.status + ')');
+      responseError.status = res.status;
+      throw responseError;
     }
     if (!res.body) throw new Error('The response did not include a readable stream.');
     var reader = res.body.getReader();
@@ -1033,7 +1781,9 @@ async function send(){
     }
     else messageStatus(out, 'No answer was returned.', 'error', false);
   } catch(err) {
-    if (controller.signal.aborted || (err && err.name === 'AbortError')) return;
+    if (controller.signal.aborted || (err && err.name === 'AbortError')) {
+      return;
+    }
     pending = false;
     flushRender();
     if (acc && !assistantStored) {
@@ -1042,12 +1792,21 @@ async function send(){
     }
     messageStatus(out, 'Response interrupted: ' + (err && err.message ? err.message : 'Unknown error'), 'error', false);
     scrollChat(false);
+    if (err && (err.status === 400 || err.status === 409)) {
+      userBubble.remove();
+      out.remove();
+      chatHistory.pop();
+      if (!$('#chat').children.length) renderChatEmpty();
+    }
   } finally {
     if (activeRequest === request) {
       activeRequest = null;
-      $('#send').disabled = false;
-      $('#model').disabled = false;
-      $('#chat').setAttribute('aria-busy', 'false');
+      conversationLoading = true;
+      refreshChatBusy();
+      await syncActiveConversation(true);
+      await loadConversations(true, false, true);
+      conversationLoading = false;
+      refreshChatBusy();
       $('#prompt').focus();
     }
   }

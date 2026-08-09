@@ -34,9 +34,11 @@ export default {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const method = request.method.toUpperCase();
 
-    // CORS preflight for the public API surface.
+    // CORS preflight is intentionally limited to the public API surface.
+    // The cookie-authenticated dashboard APIs are same-origin only.
     if (method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: API_CORS });
+      if (path.startsWith('/v1/')) return new Response(null, { status: 204, headers: API_CORS });
+      return new Response(null, { status: 405, headers: { allow: 'GET, POST, PATCH, DELETE' } });
     }
 
     // ---- health ----------------------------------------------------------
@@ -45,7 +47,7 @@ export default {
         {
           status: 'ok',
           service: 'cloudflare-ai-worker',
-          version: '2.3.0',
+          version: '2.4.0',
           access_configured: isAccessConfigured(env),
           default_model: env.DEFAULT_MODEL,
           web_search_configured: Boolean(env.TAVILY_API_KEY?.trim() || env.WEBSEARCH || env.SEARXNG_URL),

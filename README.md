@@ -10,12 +10,15 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 - Optional per-request search over the indexed `ai.lofuyu.com` website with `site_search: true`
 - `POST /v1/embeddings`
 - OpenAI-style API keys created and revoked from the authenticated dashboard
-- Cloudflare Access SSO for `/admin`; an API key is not needed to sign in or use the dashboard playground
+- Cloudflare Access SSO for `/admin`; an API key is not needed to sign in or use dashboard Chats
+- D1-backed, account-scoped conversation history with cross-device reload, paginated transcripts, rename, delete, deep links, and persisted source cards
 - SHA-256 key hashes and lightweight daily usage counters in the existing `cfai-db` D1 database
 - A Usage tab with a live account-level Workers AI Neurons metric from Cloudflare's account usage API
 - NVIDIA NIM fallback models, with the free-endpoint catalog refreshed daily
 
 The Worker calls the existing Workers AI binding directly. It does not add an AI Gateway, Queue, Durable Object, Vectorize index, or another paid service. The official `openai` JavaScript SDK is used by `scripts/verify-openai-sdk.mjs` to test the public compatibility surface.
+
+The dashboard's persistent-history design and the planned separation between chat history and editable long-term memory are documented in [docs/persistent-chat-architecture.md](docs/persistent-chat-architecture.md).
 
 ## NVIDIA NIM fallback
 
@@ -74,7 +77,9 @@ This only enables a read-only GraphQL request to Cloudflare's existing Workers A
 
 ```sh
 npm ci
+npm test
 npm run typecheck
+npm run db:migrate:local
 ```
 
 To run the end-to-end SDK check, first create a key in `/admin` and pass it without committing it:
@@ -117,4 +122,11 @@ Cloudflare Workers Git integration is already connected to `MikuMikuMe/Cloudflar
 
 The workflow has an optional Wrangler deployment job that runs only when `deploy_with_wrangler` is explicitly enabled in a manual workflow dispatch. Normal pushes do not require a Cloudflare token. If you choose GitHub-owned deployment instead of the already-connected Cloudflare Git integration, create a narrowly scoped Cloudflare API token with permission to deploy this Worker and add it as the `CLOUDFLARE_API_TOKEN` repository secret. Never commit the token or put it in the frontend.
 
-D1 migrations are idempotent and the existing `cfai-db` database already contains migrations `0001_init.sql` and `0002_nvidia_models.sql`.
+D1 migrations are additive and idempotent. Persistent Chats requires `0003_conversations.sql`. Apply it before deploying schema-dependent code:
+
+```sh
+npm run db:migrate
+npm run deploy
+```
+
+The optional GitHub-owned deployment job already applies migrations before deploying. Cloudflare's default Git integration runs `wrangler deploy` only and does not apply D1 migrations automatically, so a production release using that path must apply `0003` first. Until then, the conversation API fails closed with a controlled `503` rather than exposing or corrupting history.

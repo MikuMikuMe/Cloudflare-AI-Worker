@@ -223,6 +223,37 @@ test('chat completions expose tools but do not search when the model declines', 
   }
 });
 
+test('streaming a direct model answer emits an explicit terminal sentinel', async () => {
+  const restoreFetch = installSearchResponse();
+  try {
+    const env = environment(async () => ({
+      response: 'Hello without searching.',
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+    const response = await handleChatCompletions(
+      new Request('https://ai.example.test/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{ role: 'user', content: 'hi' }],
+          stream: true,
+        }),
+      }),
+      env,
+      context(),
+      true,
+    );
+
+    const output = await response.text();
+    assert.match(output, /Hello without searching\./);
+    assert.match(output, /data: \[DONE\]/);
+    assert.doesNotMatch(output, /"error"/);
+  } finally {
+    restoreFetch();
+  }
+});
+
 test('chat completions execute web tools only after the model calls one', async () => {
   const restoreFetch = installSearchResponse();
   try {
@@ -269,7 +300,7 @@ test('streaming reports that web search ran even when the provider returns no UR
       if (input.stream) {
         return new ReadableStream({
           start(controller) {
-            controller.enqueue(new TextEncoder().encode('{"response":"No matching pages."}\n'));
+            controller.enqueue(new TextEncoder().encode('{"response":"No matching pages."}\n[DONE]\n'));
             controller.close();
           },
         });
@@ -333,6 +364,7 @@ test('the final model is told not to emit client-side tool invocation JSON', asy
     const finalSystemMessage = finalMessages[finalMessages.length - 1]?.content ?? '';
     assert.match(finalSystemMessage, /already executed live web search/i);
     assert.match(finalSystemMessage, /do not emit.*invocation/i);
+    assert.match(finalSystemMessage, /do not append a separate Sources or References URL list/i);
     assert.match(finalSystemMessage, /web_fetcher/i);
   } finally {
     restoreFetch();

@@ -194,7 +194,7 @@ function nvidiaStreamBody(inputs: Record<string, unknown>): Record<string, unkno
 
 function bufferedModelStream(value: unknown): ReadableStream<Uint8Array> {
   const payload = JSON.stringify(value ?? { response: '' }) ?? '{"response":""}';
-  const bytes = new TextEncoder().encode(`${payload}\n`);
+  const bytes = new TextEncoder().encode(`${payload}\n[DONE]\n`);
   return new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(bytes);

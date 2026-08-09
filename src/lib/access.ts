@@ -119,11 +119,11 @@ export async function verifyAccessJwt(request: Request, env: Env): Promise<Acces
       decodeBase64Url(encodedSignature),
       new TextEncoder().encode(`${encodedHeader}.${encodedClaims}`),
     );
-    if (!valid || !claims.email) return null;
+    if (!valid || !claims.email || !claims.sub?.trim()) return null;
 
     return {
       email: claims.email.trim().toLowerCase(),
-      sub: claims.sub?.trim() || claims.email.trim().toLowerCase(),
+      sub: claims.sub.trim(),
       aud: env.ACCESS_AUD.trim(),
     };
   } catch {
