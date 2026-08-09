@@ -93,11 +93,14 @@ export function toOpenAISearchStream(
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const created = Math.floor(Date.now() / 1000);
+  let upstreamReader: ReadableStreamDefaultReader | null = null;
+  let cancelled = false;
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
       void (async () => {
         const reader = upstream.getReader();
+        upstreamReader = reader;
         const decoder = new TextDecoder();
         let buffer = '';
         let text = '';
@@ -105,7 +108,7 @@ export function toOpenAISearchStream(
         let finalized = false;
 
         const finish = (): void => {
-          if (finalized) return;
+          if (finalized || cancelled) return;
           finalized = true;
 
           const completionTokens = estimateTextTokens(text);
@@ -143,6 +146,17 @@ export function toOpenAISearchStream(
 
           options.onDone(usage);
           controller.enqueue(doneLine(encoder));
+          controller.close();
+        };
+
+        const fail = (message: string): void => {
+          if (finalized || cancelled) return;
+          finalized = true;
+          controller.enqueue(
+            sseLine(encoder, {
+              error: { message, type: 'api_error', code: 'upstream_error' },
+            }),
+          );
           controller.close();
         };
 
@@ -188,8 +202,9 @@ export function toOpenAISearchStream(
 
         try {
           let upstreamDone = false;
-          while (!upstreamDone) {
+          while (!upstreamDone && !cancelled) {
             const { value, done } = await reader.read();
+            if (cancelled) return;
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
@@ -205,24 +220,24 @@ export function toOpenAISearchStream(
             }
           }
 
+          if (cancelled) return;
           buffer += decoder.decode();
           if (!finalized && buffer.trim()) processBlock(buffer);
-          if (!finalized) finish();
+          if (!finalized) fail('Upstream web search stream ended before completion.');
         } catch (error) {
-          if (!finalized) {
+          if (!finalized && !cancelled) {
             const message = error instanceof Error ? error.message : String(error);
-            controller.enqueue(
-              sseLine(encoder, {
-                error: { message: `Upstream web search error: ${message}`, type: 'api_error', code: 'upstream_error' },
-              }),
-            );
-            controller.enqueue(doneLine(encoder));
-            controller.close();
+            fail(`Upstream web search error: ${message}`);
           }
         } finally {
+          if (upstreamReader === reader) upstreamReader = null;
           reader.releaseLock();
         }
       })();
+    },
+    async cancel(reason) {
+      cancelled = true;
+      if (upstreamReader) await upstreamReader.cancel(reason);
     },
   });
 }

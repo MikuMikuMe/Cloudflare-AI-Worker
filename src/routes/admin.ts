@@ -7,10 +7,20 @@ import { isAccessConfigured, verifyAccessJwt } from '../lib/access';
 import { CloudflareUsageError, fetchCloudflareNeurons } from '../lib/cloudflare-usage';
 import { json } from '../lib/http';
 import { createKey, deleteKey, listKeys, revokeKey } from '../lib/keys';
+import { handlePersistentConversationTurn } from './conversation-turns';
+import { handleConversationApi } from './conversations';
 import { handleChatCompletions } from './v1';
 import type { AccessIdentity, Env } from '../types';
 
 const NO_STORE = { 'cache-control': 'no-store' };
+
+export function isCrossSiteMutation(request: Request): boolean {
+  const method = request.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return false;
+  const origin = request.headers.get('origin');
+  const fetchSite = request.headers.get('sec-fetch-site')?.toLowerCase();
+  return fetchSite === 'cross-site' || Boolean(origin && origin !== new URL(request.url).origin);
+}
 
 export async function requireIdentity(
   request: Request,
@@ -58,7 +68,21 @@ export async function handleAdminApi(
   const { identity } = auth;
   const method = request.method.toUpperCase();
 
-  // The browser playground is intentionally authenticated by the Access
+  if (isCrossSiteMutation(request)) {
+    return json(
+      { error: 'cross_site_request', message: 'Dashboard changes must come from this signed-in site.' },
+      403,
+      NO_STORE,
+    );
+  }
+
+  const persistentTurnResponse = await handlePersistentConversationTurn(request, env, path, ctx, identity);
+  if (persistentTurnResponse) return persistentTurnResponse;
+
+  const conversationResponse = await handleConversationApi(request, env, path, identity);
+  if (conversationResponse) return conversationResponse;
+
+  // The legacy dashboard chat endpoint is authenticated by the Access
   // session, not by an API key. External callers still use /v1/* with keys.
   if (path === '/admin/api/chat/completions' && method === 'POST') {
     return handleChatCompletions(request, env, ctx, true);
