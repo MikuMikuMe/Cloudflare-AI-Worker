@@ -50,6 +50,7 @@ const STYLES = `
   .stat .n{font-size:23px;font-weight:700;letter-spacing:-.02em}
   .stat .l{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:3px}
   select,input[type=text],textarea{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--fg);font-size:13.5px;font-family:inherit}
+  select option:disabled{color:#667085;background:#11151d}
   select:focus,input:focus,textarea:focus{outline:none;border-color:var(--accent2)}
   .chat{background:var(--panel);border:1px solid var(--line);border-radius:12px;height:400px;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:11px;margin-bottom:12px}
   .msg{max-width:82%;padding:10px 14px;border-radius:11px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;word-wrap:break-word}
@@ -251,15 +252,25 @@ function addBubble(role, text){
   return d;
 }
 
-fetch('/v1/models').then(function(r){ return r.json(); }).then(function(d){
+function loadModels(){
+  fetch('/v1/models').then(function(r){ return r.json(); }).then(function(d){
   var sel = $('#model');
+  sel.innerHTML = '';
   (d.data || []).filter(function(m){ return m.id.indexOf('bge') === -1 && m.id.indexOf('embedding') === -1; })
     .forEach(function(m){
       var o = document.createElement('option');
-      o.value = m.id; o.textContent = m.id.replace('@cf/', '');
+      o.value = m.id;
+      o.disabled = m.disabled === true;
+      o.textContent = (m.provider === 'nvidia' ? 'NVIDIA · ' : '') + m.id.replace('@cf/', '')
+        + (o.disabled ? ' · Cloudflare neurons exhausted' : '');
       sel.appendChild(o);
     });
-});
+  var firstEnabled = sel.querySelector('option:not([disabled])');
+  if (firstEnabled) sel.value = firstEnabled.value;
+  }).catch(function(){ $('#model').innerHTML = '<option value="">Models unavailable</option>'; });
+}
+
+loadModels();
 
 $('#clear').onclick = function(){ chatHistory = []; $('#chat').innerHTML = ''; };
 
@@ -364,6 +375,7 @@ function renderCloudflareUsage(d){
     + '<div class="cf-usage-value">' + neurons(used) + ' <small>/ ' + neurons(limit) + ' neurons</small></div></div>'
     + '<div class="cf-meter"><span style="width:' + percent.toFixed(2) + '%"></span></div>'
     + '<div class="cf-usage-note">Live account-level data from Cloudflare. This is separate from the gateway counters below.</div>';
+  loadModels();
 }
 
 function renderCloudflareUsageError(d){
@@ -374,6 +386,7 @@ function renderCloudflareUsageError(d){
     + '<div class="cf-usage-sub">Neurons used today</div></div>'
     + '<div class="cf-usage-value">' + (setup ? 'Setup required' : 'Unavailable') + '</div></div>'
     + '<div class="cf-usage-note">' + esc((d && d.message) || 'Refresh to try again.') + '</div>';
+  loadModels();
 }
 
 function loadCloudflareUsage(){

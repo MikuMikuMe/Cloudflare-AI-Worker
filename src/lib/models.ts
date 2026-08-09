@@ -1,3 +1,5 @@
+import type { NvidiaModelRecord } from './nvidia';
+
 const CHAT_MODELS = [
   '@cf/meta/llama-3.1-8b-instruct-fp8',
   '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
@@ -46,20 +48,67 @@ const OPENAI_ALIASES: Record<string, string> = {
   'o3-mini': '@cf/openai/gpt-oss-20b',
 };
 
-function modelPayload(id: string): Record<string, unknown> {
-  return { id, object: 'model', created: 1_700_000_000, owned_by: 'cloudflare' };
-}
-
-export function modelListPayload(): { object: 'list'; data: Array<Record<string, unknown>> } {
+function modelPayload(
+  id: string,
+  provider: 'cloudflare' | 'nvidia',
+  options: { cloudflareDisabled?: boolean } = {},
+): Record<string, unknown> {
+  const disabled = provider === 'cloudflare' && options.cloudflareDisabled === true;
   return {
-    object: 'list',
-    data: [...CHAT_MODELS, ...EMBEDDING_MODELS].map(modelPayload),
+    id,
+    object: 'model',
+    created: 1_700_000_000,
+    owned_by: provider,
+    provider,
+    ...(provider === 'nvidia' ? { free_endpoint: true } : {}),
+    ...(disabled
+      ? {
+          disabled: true,
+          disabled_reason: 'Cloudflare Workers AI daily free-neuron limit reached.',
+        }
+      : {}),
   };
 }
 
-export function resolveChatModel(input: string | undefined, fallback: string): string | null {
+export interface ModelListOptions {
+  nvidiaModels?: NvidiaModelRecord[];
+  cloudflareDisabled?: boolean;
+}
+
+export function modelListPayload(options: ModelListOptions = {}): { object: 'list'; data: Array<Record<string, unknown>> } {
+  return {
+    object: 'list',
+    data: [
+      ...CHAT_MODELS.map((id) => modelPayload(id, 'cloudflare', options)),
+      ...(options.nvidiaModels ?? []).map((model) => ({
+        id: model.id,
+        object: 'model',
+        created: model.created,
+        owned_by: model.owned_by,
+        provider: 'nvidia',
+        free_endpoint: true,
+      })),
+      ...EMBEDDING_MODELS.map((id) => modelPayload(id, 'cloudflare', options)),
+    ],
+  };
+}
+
+export function isCloudflareModel(model: string): boolean {
+  return model.trim().startsWith('@cf/');
+}
+
+export function isNvidiaModel(model: string, nvidiaModels: readonly NvidiaModelRecord[] = []): boolean {
+  return nvidiaModels.some((candidate) => candidate.id === model);
+}
+
+export function resolveChatModel(
+  input: string | undefined,
+  fallback: string,
+  nvidiaModels: readonly NvidiaModelRecord[] = [],
+): string | null {
   const requested = input?.trim() || fallback.trim();
   if (CHAT_MODELS.includes(requested)) return requested;
+  if (nvidiaModels.some((model) => model.id === requested)) return requested;
 
   const alias = OPENAI_ALIASES[requested.toLowerCase()];
   if (alias) return alias;

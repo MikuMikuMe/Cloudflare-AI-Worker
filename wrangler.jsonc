@@ -10,6 +10,12 @@
     "enabled": true
   },
 
+  // Refresh the existing D1-backed NVIDIA free-endpoint index once per day.
+  // This is a trigger on the current Worker, not a new service.
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  },
+
   // Workers AI - already present on the original Worker, no new cost surface.
   "ai": {
     "binding": "AI"

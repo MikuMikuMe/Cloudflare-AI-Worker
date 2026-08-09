@@ -16,6 +16,8 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   /** Server-side secret; never send this value to the dashboard browser. */
   CLOUDFLARE_USAGE_API_TOKEN?: string;
+  /** Server-side NVIDIA API Catalog key; never send this value to clients. */
+  NVIDIA_NIM_API_KEY?: string;
 }
 
 /** Identity resolved from a Cloudflare Access JWT. */

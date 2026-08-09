@@ -133,6 +133,26 @@ export async function fetchCloudflareNeurons(env: Env): Promise<CloudflareNeuron
   };
 }
 
+/**
+ * Quota checks are fail-open when analytics is unavailable. A stale analytics
+ * response should not disable every model; the upstream Workers AI error will
+ * still be surfaced if Cloudflare itself rejects a request.
+ */
+export async function cloudflareNeuronsExhausted(
+  env: Env,
+): Promise<{ depleted: boolean; usage?: CloudflareNeuronsUsage }> {
+  if (!env.CLOUDFLARE_ACCOUNT_ID?.trim() || !env.CLOUDFLARE_USAGE_API_TOKEN?.trim()) {
+    return { depleted: false };
+  }
+
+  try {
+    const usage = await fetchCloudflareNeurons(env);
+    return { depleted: usage.used_neurons >= usage.daily_limit_neurons, usage };
+  } catch {
+    return { depleted: false };
+  }
+}
+
 function utcDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

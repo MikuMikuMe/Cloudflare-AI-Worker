@@ -57,7 +57,7 @@ export function landingPage(origin: string): string {
 <div class="grid">
   <div class="card"><h3>Sign in with Cloudflare</h3><p>The dashboard sits behind Cloudflare Access. No shared password, no bootstrap API key.</p></div>
   <div class="card"><h3>Mint your own keys</h3><p>Create, name and revoke keys yourself. Only SHA-256 hashes are ever stored.</p></div>
-  <div class="card"><h3>Know what you spent</h3><p>Per-key request and token counters, so a runaway script is obvious.</p></div>
+  <div class="card"><h3>Keep chatting after quota</h3><p>Free NVIDIA NIM models appear automatically, and Cloudflare models grey out when the daily Neurons limit is reached.</p></div>
 </div>
 
 <h4>Endpoints</h4>

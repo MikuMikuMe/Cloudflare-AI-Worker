@@ -13,8 +13,15 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 - Cloudflare Access SSO for `/admin`; an API key is not needed to sign in or use the dashboard playground
 - SHA-256 key hashes and lightweight daily usage counters in the existing `cfai-db` D1 database
 - A Usage tab with a live account-level Workers AI Neurons metric from Cloudflare's account usage API
+- NVIDIA NIM fallback models, with the free-endpoint catalog refreshed daily
 
 The Worker calls the existing Workers AI binding directly. It does not add an AI Gateway, Queue, Durable Object, Vectorize index, or another paid service. The official `openai` JavaScript SDK is used by `scripts/verify-openai-sdk.mjs` to test the public compatibility surface.
+
+## NVIDIA NIM fallback
+
+The Worker keeps the NVIDIA NIM credential server-side in the `NVIDIA_NIM_API_KEY` secret and proxies NVIDIA's OpenAI-compatible `/v1/chat/completions` endpoint, including SSE streaming. NVIDIA's authenticated `/v1/models` response does not identify which models are free, so the daily Worker cron reads the public Build catalog's `Free Endpoint` pages and intersects those IDs with the callable NIM catalog. The last successful index is retained only when the public catalog is temporarily unavailable; a successful refresh removes stale models. `GET /v1/models` marks these entries with `provider: "nvidia"` and `free_endpoint: true`.
+
+When the live Cloudflare Workers AI Neurons metric reaches the daily limit, all Cloudflare models are returned with `disabled: true` and the dashboard greys them out. Requests for those models return a clear `429` with `code: "cloudflare_neurons_exhausted"`; NVIDIA models remain available. The existing D1 database stores the small model index, and the cron uses the current Worker only—no additional service is created.
 
 ## Automatic live search
 
@@ -107,4 +114,4 @@ Cloudflare Workers Git integration is already connected to `MikuMikuMe/Cloudflar
 
 The workflow has an optional Wrangler deployment job that runs only when `deploy_with_wrangler` is explicitly enabled in a manual workflow dispatch. Normal pushes do not require a Cloudflare token. If you choose GitHub-owned deployment instead of the already-connected Cloudflare Git integration, create a narrowly scoped Cloudflare API token with permission to deploy this Worker and add it as the `CLOUDFLARE_API_TOKEN` repository secret. Never commit the token or put it in the frontend.
 
-D1 migrations are idempotent and the existing `cfai-db` database already contains migration `0001_init.sql`.
+D1 migrations are idempotent and the existing `cfai-db` database already contains migrations `0001_init.sql` and `0002_nvidia_models.sql`.

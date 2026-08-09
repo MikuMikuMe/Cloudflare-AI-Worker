@@ -2,6 +2,7 @@
 
 import { verifyAccessJwt } from '../lib/access';
 import { extractSearchSources, toOpenAISearchStream } from '../lib/ai-search';
+import { cloudflareNeuronsExhausted } from '../lib/cloudflare-usage';
 import {
   buildCompletion,
   estimatePromptTokens,
@@ -18,6 +19,14 @@ import {
   prepareWebSearchAgent,
 } from '../lib/web-search';
 import {
+  getNvidiaModelIndex,
+  NvidiaApiError,
+  requestNvidiaChat,
+  requestNvidiaJson,
+} from '../lib/nvidia';
+import {
+  isCloudflareModel,
+  isNvidiaModel,
   modelListPayload,
   resolveChatModel,
   resolveEmbeddingModel,
@@ -143,6 +152,23 @@ function copyNumber(
   if (typeof value === 'number' && Number.isFinite(value)) target[field] = value;
 }
 
+function copyNvidiaInputs(target: Record<string, unknown>, body: ChatCompletionRequest): void {
+  if (Array.isArray(body.tools)) target.tools = body.tools;
+  if (body.tool_choice != null) target.tool_choice = body.tool_choice;
+  if (typeof body.parallel_tool_calls === 'boolean') target.parallel_tool_calls = body.parallel_tool_calls;
+  if (typeof body.user === 'string' && body.user.trim()) target.user = body.user.slice(0, 256);
+  if (typeof body.stop === 'string' || Array.isArray(body.stop)) target.stop = body.stop;
+}
+
+function nvidiaRunner(env: Env, model: string) {
+  return async (requestedModel: string, input: Record<string, unknown>): Promise<unknown> =>
+    requestNvidiaJson(env, requestedModel || model, input);
+}
+
+function nvidiaStreamBody(inputs: Record<string, unknown>): Record<string, unknown> {
+  return { ...inputs, stream: true };
+}
+
 export async function handleChatCompletions(
   request: Request,
   env: Env,
@@ -176,7 +202,8 @@ export async function handleChatCompletions(
     return apiError('Only n=1 is supported by this gateway.', 400, 'invalid_request_error', 'unsupported_value', 'n');
   }
 
-  const model = resolveChatModel(body.model, env.DEFAULT_MODEL);
+  const nvidiaModels = await getNvidiaModelIndex(env);
+  const model = resolveChatModel(body.model, env.DEFAULT_MODEL, nvidiaModels);
   if (!model) {
     return apiError(
       `The model '${body.model ?? ''}' does not exist or is not available. Call GET /v1/models for the list.`,
@@ -185,6 +212,20 @@ export async function handleChatCompletions(
       'model_not_found',
       'model',
     );
+  }
+
+  const nvidiaProvider = isNvidiaModel(model, nvidiaModels);
+  if (isCloudflareModel(model)) {
+    const quota = await cloudflareNeuronsExhausted(env);
+    if (quota.depleted) {
+      return apiError(
+        'Cloudflare Workers AI has reached its daily free-neuron limit. Choose an NVIDIA NIM model from GET /v1/models; Cloudflare models will be enabled again after the UTC reset.',
+        429,
+        'rate_limit_error',
+        'cloudflare_neurons_exhausted',
+        'model',
+      );
+    }
   }
 
   const inputs: Record<string, unknown> = { messages };
@@ -196,6 +237,7 @@ export async function handleChatCompletions(
 
   const maxTokens = body.max_completion_tokens ?? body.max_tokens;
   if (typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0) inputs.max_tokens = maxTokens;
+  copyNvidiaInputs(inputs, body);
 
   const id = newCompletionId();
   const responseModel = body.model?.trim() || model;
@@ -256,6 +298,15 @@ export async function handleChatCompletions(
 
   try {
     if (siteSearchEnabled) {
+      if (nvidiaProvider) {
+        return apiError(
+          'Indexed Cloudflare AI Search is available only for Cloudflare models. Use the automatic live web-search path with this NVIDIA model.',
+          400,
+          'invalid_request_error',
+          'unsupported_value',
+          'site_search',
+        );
+      }
       if (!env.AI_SEARCH) {
         return apiError(
           'Web search is not configured on this Worker yet.',
@@ -339,6 +390,7 @@ export async function handleChatCompletions(
           inputs,
           normalizeWebSearchOptions({ max_num_results: webSearchMaxResults, max_fetch_chars: webSearchMaxFetchChars }),
           model,
+          nvidiaProvider ? nvidiaRunner(env, model) : undefined,
         );
       } catch (error) {
         if (error instanceof WebSearchError) {
@@ -359,7 +411,10 @@ export async function handleChatCompletions(
       };
 
       if (body.stream === true) {
-        const upstream = (await env.AI.run(model as any, { ...finalInputs, stream: true } as any)) as ReadableStream;
+        const upstream = nvidiaProvider
+          ? (await requestNvidiaChat(env, model, nvidiaStreamBody(finalInputs))).body
+          : (await env.AI.run(model as any, { ...finalInputs, stream: true } as any)) as ReadableStream;
+        if (!upstream) throw new Error('upstream returned no response body');
         const stream = toOpenAIStream(upstream, {
           id,
           model: responseModel,
@@ -382,7 +437,9 @@ export async function handleChatCompletions(
         });
       }
 
-      const raw = (await env.AI.run(model as any, finalInputs as any)) as unknown as Record<string, unknown>;
+      const raw = nvidiaProvider
+        ? await requestNvidiaJson(env, model, finalInputs)
+        : (await env.AI.run(model as any, finalInputs as any)) as unknown as Record<string, unknown>;
       const text = extractText(raw);
       const finalUsage = extractUsage(raw, finalPromptTokens, text);
       const usage = {
@@ -403,7 +460,10 @@ export async function handleChatCompletions(
     }
 
     if (body.stream === true) {
-      const upstream = (await env.AI.run(model as any, { ...inputs, stream: true } as any)) as ReadableStream;
+      const upstream = nvidiaProvider
+        ? (await requestNvidiaChat(env, model, nvidiaStreamBody(inputs))).body
+        : (await env.AI.run(model as any, { ...inputs, stream: true } as any)) as ReadableStream;
+      if (!upstream) throw new Error('upstream returned no response body');
       const stream = toOpenAIStream(upstream, {
         id,
         model: responseModel,
@@ -423,14 +483,17 @@ export async function handleChatCompletions(
       });
     }
 
-    const result = await env.AI.run(model as any, inputs as any);
+    const result = nvidiaProvider
+      ? await requestNvidiaJson(env, model, inputs)
+      : await env.AI.run(model as any, inputs as any);
     const text = extractText(result);
     const usage = extractUsage(result, promptTokens, text);
     accountUsage(usage);
     return json(buildCompletion(id, responseModel, text, usage), 200, API_CORS);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return apiError(`Upstream model error: ${message}`, 502, 'api_error', 'upstream_error');
+    const status = error instanceof NvidiaApiError ? error.status : 502;
+    return apiError(`Upstream model error: ${message}`, status, 'api_error', 'upstream_error');
   }
 }
 
@@ -487,6 +550,17 @@ export async function handleEmbeddings(request: Request, env: Env, ctx: Executio
     );
   }
 
+  const quota = await cloudflareNeuronsExhausted(env);
+  if (quota.depleted) {
+    return apiError(
+      'Cloudflare Workers AI has reached its daily free-neuron limit. Choose an NVIDIA NIM chat model from GET /v1/models; Cloudflare models will be enabled again after the UTC reset.',
+      429,
+      'rate_limit_error',
+      'cloudflare_neurons_exhausted',
+      'model',
+    );
+  }
+
   try {
     const result = await env.AI.run(model as any, { text: inputs } as any);
     const vectors = extractVectors(result);
@@ -512,6 +586,10 @@ export async function handleEmbeddings(request: Request, env: Env, ctx: Executio
   }
 }
 
-export function handleModels(): Response {
-  return json(modelListPayload(), 200, API_CORS);
+export async function handleModels(env: Env): Promise<Response> {
+  const [nvidiaModels, quota] = await Promise.all([
+    getNvidiaModelIndex(env),
+    cloudflareNeuronsExhausted(env),
+  ]);
+  return json(modelListPayload({ nvidiaModels, cloudflareDisabled: quota.depleted }), 200, API_CORS);
 }

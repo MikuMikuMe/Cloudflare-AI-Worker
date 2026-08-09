@@ -48,6 +48,8 @@ export interface WebSearchAgentResult {
   provider: 'cloudflare' | 'searxng';
 }
 
+export type WebSearchModelRunner = (model: string, inputs: Record<string, unknown>) => Promise<unknown>;
+
 interface SearchResultPayload {
   query: string;
   results: WebSearchSource[];
@@ -579,6 +581,7 @@ export async function prepareWebSearchAgent(
   inputs: Record<string, unknown>,
   options: WebSearchOptions,
   requestedModel?: string,
+  runModel?: WebSearchModelRunner,
 ): Promise<WebSearchAgentResult> {
   if (!env.WEBSEARCH && !env.SEARXNG_URL) {
     throw new WebSearchError(
@@ -588,9 +591,10 @@ export async function prepareWebSearchAgent(
   }
 
   const requested = requestedModel?.trim();
-  const plannerModel = requested && TOOL_CAPABLE_MODELS.has(requested)
+  const plannerModel = requested && (runModel || TOOL_CAPABLE_MODELS.has(requested))
     ? requested
     : env.WEB_SEARCH_MODEL?.trim() || DEFAULT_SEARCH_MODEL;
+  const plannerRunner = runModel ?? ((model: string, plannerInput: Record<string, unknown>) => env.AI.run(model as any, plannerInput as any) as Promise<unknown>);
   const agentMessages: ChatMessage[] = [searchSystemMessage(), ...messages];
   const sources: WebSearchSource[] = [];
   const searches: WebSearchQuery[] = [];
@@ -608,7 +612,7 @@ export async function prepareWebSearchAgent(
     };
     let plannerResponse: unknown;
     try {
-      plannerResponse = await env.AI.run(plannerModel as any, plannerInput as any);
+      plannerResponse = await plannerRunner(plannerModel, plannerInput);
     } catch {
       // A model/runtime can reject the tool schema with Cloudflare error 8001.
       // Search must remain useful even when the optional planner call cannot
