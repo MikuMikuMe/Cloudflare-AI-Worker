@@ -276,11 +276,13 @@ function renderInline(value, sources, depth){
       }
     }
 
-    if (text.charAt(i) === '[') {
-      var labelEnd = text.indexOf(']', i + 1);
+    if (text.charAt(i) === '[' || text.charAt(i) === '【' || text.charAt(i) === '［') {
+      var openingBracket = text.charAt(i);
+      var closingBracket = openingBracket === '【' ? '】' : openingBracket === '［' ? '］' : ']';
+      var labelEnd = text.indexOf(closingBracket, i + 1);
       if (labelEnd > i + 1) {
         var label = text.slice(i + 1, labelEnd);
-        if (text.charAt(labelEnd + 1) === '(') {
+        if (openingBracket === '[' && text.charAt(labelEnd + 1) === '(') {
           var hrefEnd = text.indexOf(')', labelEnd + 2);
           if (hrefEnd > labelEnd + 2) {
             var markdownHref = safeHref(text.slice(labelEnd + 2, hrefEnd).trim());
@@ -294,7 +296,10 @@ function renderInline(value, sources, depth){
           }
         }
 
-        var citation = /^(\d+)(?:\s*†\s*(.+))?$/.exec(label);
+        var normalisedCitationLabel = label.replace(/[０-９]/g, function(digit){
+          return String.fromCharCode(digit.charCodeAt(0) - 65248);
+        });
+        var citation = /^(\d+)(?:\s*†\s*(.+))?$/.exec(normalisedCitationLabel);
         if (citation) {
           var number = Number(citation[1]);
           var source = number > 0
@@ -304,7 +309,7 @@ function renderInline(value, sources, depth){
           var citationTitle = source
             ? 'Source ' + number + ': ' + source.title
             : 'Source ' + number;
-          if (citation[2]) citationTitle += ' (' + citation[2] + ')';
+          if (citation[2]) citationTitle += ' · cited passage ' + citation[2].trim();
           if (source && source.url) {
             html += '<a class="citation" href="' + escapeMarkup(source.url)
               + '" target="_blank" rel="noopener noreferrer" aria-label="'

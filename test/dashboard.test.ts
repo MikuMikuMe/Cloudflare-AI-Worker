@@ -52,6 +52,55 @@ test('playground renderer formats common Markdown and links search citations', (
   assert.match(html, /&lt;safe&gt;/);
 });
 
+test('playground renderer turns full-width search citations into compact source links', () => {
+  const format = formatter();
+  const sources = format.normaliseSources([
+    { url: 'https://example.com/preview', title: 'Preview announcement' },
+    { url: 'https://example.com/release', title: 'Public release' },
+  ]);
+  const html = format.renderMarkdown(
+    'Previewed in June【1†L1-L3】【2†L7-L11】; unknown source 【3†L2】.',
+    sources,
+  );
+
+  assert.doesNotMatch(html, /【\d+†L/);
+  assert.doesNotMatch(html, /†/);
+  assert.equal((html.match(/class="citation"/g) || []).length, 3);
+  assert.match(html, /<\/a><a class="citation"/);
+  assert.match(html, /href="https:\/\/example\.com\/preview"[^>]*>\[1\]<\/a>/);
+  assert.match(html, /title="Source 1: Preview announcement · cited passage L1-L3"/);
+  assert.match(html, /href="https:\/\/example\.com\/release"[^>]*>\[2\]<\/a>/);
+  assert.match(html, /aria-label="Source 2: Public release · cited passage L7-L11"/);
+  assert.match(html, /<span class="citation" title="Source 3 · cited passage L2">\[3\]<\/span>/);
+});
+
+test('playground renderer accepts paired full-width brackets and digits without rewriting plain text', () => {
+  const format = formatter();
+  const sources = format.normaliseSources([
+    { url: 'https://example.com/preview', title: 'Preview announcement' },
+    { url: 'https://example.com/release', title: 'Public release' },
+    { url: 'https://example.com/notes', title: 'Release notes' },
+  ]);
+  const html = format.renderMarkdown(
+    [
+      'Full-width digits \u3010\uFF11\u3011.',
+      'Full-width square brackets \uFF3B2\u2020L3-L4\uFF3D.',
+      'ASCII citation [3].',
+      'Plain label 【release note】.',
+      'Plain label \uFF3Brelease note\uFF3D.',
+    ].join(' '),
+    sources,
+  );
+
+  assert.equal((html.match(/class="citation"/g) || []).length, 3);
+  assert.match(html, /href="https:\/\/example\.com\/preview"[^>]*>\[1\]<\/a>/);
+  assert.match(html, /href="https:\/\/example\.com\/release"[^>]*>\[2\]<\/a>/);
+  assert.match(html, /title="Source 2: Public release · cited passage L3-L4"/);
+  assert.match(html, /href="https:\/\/example\.com\/notes"[^>]*>\[3\]<\/a>/);
+  assert.match(html, /【release note】/);
+  assert.match(html, /\uFF3Brelease note\uFF3D/);
+});
+
 test('playground renderer escapes model HTML and rejects unsafe links', () => {
   const format = formatter();
   const html = format.renderMarkdown(
