@@ -26,7 +26,7 @@ export interface WebSearchOptions {
 export interface WebSearchQuery {
   query: string;
   result_count: number;
-  provider: 'cloudflare' | 'searxng';
+  provider: 'tavily' | 'cloudflare' | 'searxng';
 }
 
 export interface WebSearchAgentResult {
@@ -34,7 +34,7 @@ export interface WebSearchAgentResult {
   sources: WebSearchSource[];
   searches: WebSearchQuery[];
   priorUsage: Usage;
-  provider: 'cloudflare' | 'searxng' | null;
+  provider: 'tavily' | 'cloudflare' | 'searxng' | null;
   performed: boolean;
   /** The first model response when it declined to use a web tool. */
   response?: unknown;
@@ -45,7 +45,7 @@ export type WebSearchModelRunner = (model: string, inputs: Record<string, unknow
 interface SearchResultPayload {
   query: string;
   results: WebSearchSource[];
-  provider: 'cloudflare' | 'searxng';
+  provider: 'tavily' | 'cloudflare' | 'searxng';
 }
 
 interface FetchResultPayload {
@@ -273,6 +273,15 @@ function providerHeaders(apiKey: string | undefined): HeadersInit {
   };
 }
 
+function tavilyHeaders(apiKey: string): HeadersInit {
+  return {
+    accept: 'application/json',
+    'content-type': 'application/json',
+    'user-agent': 'Cloudflare-AI-Worker/2.3 (+https://ai.lofuyu.com)',
+    authorization: `Bearer ${apiKey}`,
+  };
+}
+
 function normalizeSearchResults(value: unknown, maxResults: number): WebSearchSource[] {
   const record = asRecord(value);
   const raw = Array.isArray(record?.results) ? record.results : [];
@@ -300,6 +309,13 @@ function normalizeSearchResults(value: unknown, maxResults: number): WebSearchSo
       },
     ];
   }).slice(0, maxResults);
+}
+
+function normalizeTavilyResults(value: unknown, maxResults: number): WebSearchSource[] {
+  return normalizeSearchResults(value, maxResults).map((source) => ({
+    ...source,
+    source: source.source || 'tavily',
+  }));
 }
 
 function normalizeCloudflareResults(value: unknown, maxResults: number): WebSearchSource[] {
@@ -347,13 +363,54 @@ async function searchCloudflareWeb(
   }
 }
 
+async function searchTavily(
+  apiKey: string,
+  query: string,
+  maxResults: number,
+): Promise<SearchResultPayload> {
+  const response = await fetchWithTimeout(
+    'https://api.tavily.com/search',
+    {
+      method: 'POST',
+      headers: tavilyHeaders(apiKey),
+      body: JSON.stringify({
+        query,
+        search_depth: 'advanced',
+        max_results: clamp(maxResults, 1, 10),
+        include_answer: false,
+        include_raw_content: false,
+        include_images: false,
+      }),
+    },
+    SEARCH_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new WebSearchError(`Tavily search provider returned HTTP ${response.status}.`, 'provider_http_error');
+  }
+
+  const body = await response.json().catch(() => null);
+  return {
+    query,
+    results: normalizeTavilyResults(body, clamp(maxResults, 1, 10)),
+    provider: 'tavily',
+  };
+}
+
 export async function searchWeb(
-  env: Pick<Env, 'WEBSEARCH' | 'SEARXNG_URL' | 'SEARXNG_API_KEY'>,
+  env: Pick<Env, 'TAVILY_API_KEY' | 'WEBSEARCH' | 'SEARXNG_URL' | 'SEARXNG_API_KEY'>,
   query: string,
   maxResults: number,
 ): Promise<SearchResultPayload> {
   const cleanedQuery = query.trim().slice(0, 512);
   if (!cleanedQuery) throw new WebSearchError('web_search requires a non-empty query.', 'invalid_query');
+
+  // Tavily is the preferred live-web provider when its server-side secret is
+  // configured. Keep the other providers as compatibility fallbacks only when
+  // Tavily is not configured; this avoids hiding Tavily auth/quota failures
+  // behind an empty legacy provider response.
+  if (env.TAVILY_API_KEY?.trim()) {
+    return await searchTavily(env.TAVILY_API_KEY.trim(), cleanedQuery, maxResults);
+  }
 
   // Prefer the managed binding when it is available. If the account has the
   // binding but Cloudflare has not enabled the provider for it, fall through
@@ -370,7 +427,7 @@ export async function searchWeb(
 
   if (!env.SEARXNG_URL) {
     throw new WebSearchError(
-      'Live web search is not configured. Enable Cloudflare Web Search for this account or set SEARXNG_URL to an approved SearXNG-compatible endpoint.',
+      'Live web search is not configured. Set TAVILY_API_KEY or enable Cloudflare Web Search / an approved SearXNG-compatible endpoint.',
       'provider_not_configured',
     );
   }
@@ -531,7 +588,7 @@ function searchEvidenceMessage(sources: WebSearchSource[], results: unknown[]): 
 }
 
 async function executeTool(
-  env: Pick<Env, 'WEBSEARCH' | 'SEARXNG_URL' | 'SEARXNG_API_KEY'>,
+  env: Pick<Env, 'TAVILY_API_KEY' | 'WEBSEARCH' | 'SEARXNG_URL' | 'SEARXNG_API_KEY'>,
   call: NormalizedToolCall,
   options: WebSearchOptions,
   sources: WebSearchSource[],
@@ -566,9 +623,9 @@ export async function prepareWebSearchAgent(
   requestedModel?: string,
   runModel?: WebSearchModelRunner,
 ): Promise<WebSearchAgentResult> {
-  if (!env.WEBSEARCH && !env.SEARXNG_URL) {
+  if (!env.TAVILY_API_KEY && !env.WEBSEARCH && !env.SEARXNG_URL) {
     throw new WebSearchError(
-      'Live web search is not configured. Enable Cloudflare Web Search for this account or provide an approved SearXNG-compatible endpoint.',
+      'Live web search is not configured. Set TAVILY_API_KEY or provide another approved live-search provider.',
       'provider_not_configured',
     );
   }
@@ -584,7 +641,7 @@ export async function prepareWebSearchAgent(
   const toolResults: unknown[] = [];
   let priorUsage = zeroUsage();
   let usedTool = false;
-  let provider: 'cloudflare' | 'searxng' | null = null;
+  let provider: 'tavily' | 'cloudflare' | 'searxng' | null = null;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const plannerInput: Record<string, unknown> = {
@@ -646,7 +703,7 @@ export async function prepareWebSearchAgent(
       toolResults.push(result);
       if (call.function.name === 'web_search') {
         const searchResult = asRecord(result);
-        if (searchResult?.provider === 'cloudflare' || searchResult?.provider === 'searxng') {
+        if (searchResult?.provider === 'tavily' || searchResult?.provider === 'cloudflare' || searchResult?.provider === 'searxng') {
           provider = searchResult.provider;
         }
       }

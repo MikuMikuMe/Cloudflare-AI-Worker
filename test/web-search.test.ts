@@ -51,6 +51,65 @@ test('Workers AI tool properties use the accepted legacy schema', () => {
   }
 });
 
+test('Tavily is the primary provider and receives an advanced search request', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  let capturedInit: RequestInit | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedInit = init;
+    return Response.json({
+      results: [
+        {
+          url: 'https://example.com/tavily-fact',
+          title: 'Tavily fact',
+          content: 'A result returned by Tavily.',
+          score: 0.98,
+        },
+      ],
+    });
+  }) as typeof fetch;
+
+  try {
+    let modelCalls = 0;
+    const env = environment(async (_model, input) => {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return { response: '', tool_calls: [{ name: 'web_search', arguments: { query: 'current Tavily fact' } }] };
+      }
+      return { response: 'Grounded answer' };
+    });
+    env.TAVILY_API_KEY = 'tavily-test-key';
+    env.WEBSEARCH = undefined;
+    env.SEARXNG_URL = undefined;
+
+    const result = await prepareWebSearchAgent(
+      env,
+      [{ role: 'user', content: 'What is current?' }],
+      { messages: [{ role: 'user', content: 'What is current?' }] },
+      { maxNumResults: 5, maxFetchChars: 20_000 },
+      MODEL,
+    );
+
+    assert.equal(result.provider, 'tavily');
+    assert.equal(result.searches[0].provider, 'tavily');
+    assert.equal(result.sources[0].url, 'https://example.com/tavily-fact');
+    assert.equal(capturedUrl, 'https://api.tavily.com/search');
+    assert.equal(capturedInit?.method, 'POST');
+    assert.equal(new Headers(capturedInit?.headers).get('authorization'), 'Bearer tavily-test-key');
+    assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
+      query: 'current Tavily fact',
+      search_depth: 'advanced',
+      max_results: 5,
+      include_answer: false,
+      include_raw_content: false,
+      include_images: false,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('a planner input error falls back to a normal answer without searching', async () => {
   const restoreFetch = installSearchResponse();
   try {

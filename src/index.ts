@@ -45,17 +45,20 @@ export default {
         {
           status: 'ok',
           service: 'cloudflare-ai-worker',
-          version: '2.2.0',
+          version: '2.3.0',
           access_configured: isAccessConfigured(env),
           default_model: env.DEFAULT_MODEL,
-          web_search_configured: Boolean(env.WEBSEARCH || env.SEARXNG_URL),
-          web_search_provider: env.WEBSEARCH
-            ? env.SEARXNG_URL
-              ? 'cloudflare (SearXNG fallback)'
-              : 'cloudflare'
-            : env.SEARXNG_URL
-              ? 'searxng'
-              : null,
+          web_search_configured: Boolean(env.TAVILY_API_KEY?.trim() || env.WEBSEARCH || env.SEARXNG_URL),
+          web_search_provider: env.TAVILY_API_KEY?.trim()
+            ? 'tavily'
+            : env.WEBSEARCH
+              ? env.SEARXNG_URL
+                ? 'cloudflare (SearXNG fallback)'
+                : 'cloudflare'
+              : env.SEARXNG_URL
+                ? 'searxng'
+                : null,
+          tavily_configured: Boolean(env.TAVILY_API_KEY?.trim()),
           site_search_configured: Boolean(env.AI_SEARCH),
           nvidia_nim_configured: Boolean(env.NVIDIA_NIM_API_KEY),
         },

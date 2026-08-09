@@ -21,10 +21,11 @@
     "binding": "AI"
   },
 
-  // Managed Cloudflare Web Search is zero-setup and discovery-only. The Worker
-  // fetches the returned public URLs itself; no crawler instance is created.
+  // Tavily is the preferred live-web provider. Store TAVILY_API_KEY as a
+  // Worker secret; the Worker fetches returned public URLs itself.
+  // Managed Cloudflare Web Search is retained as a zero-setup fallback.
   // This account currently reports the experimental binding as account_disabled,
-  // so SEARXNG_URL remains an optional fallback until Cloudflare enables it.
+  // SEARXNG_URL remains an optional legacy fallback.
   "websearch": {
     "binding": "WEBSEARCH",
     "remote": true
@@ -60,6 +61,8 @@
     // Compatibility fallback for web-search helper callers that do not provide
     // a selected model; normal chat requests use the selected model itself.
     "WEB_SEARCH_MODEL": "@cf/openai/gpt-oss-20b",
+
+    // Set TAVILY_API_KEY with `npx wrangler secret put TAVILY_API_KEY`.
 
     // Set SEARXNG_URL outside this file only when a SearXNG-compatible JSON endpoint is approved.
     // Do not point production at an arbitrary public instance without reviewing its terms and reliability.

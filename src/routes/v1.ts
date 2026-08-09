@@ -328,7 +328,7 @@ export async function handleChatCompletions(
   // force execution. When a live provider is configured, its tools are exposed
   // to the selected model and the model decides whether to call them.
   const siteSearchEnabled = body.site_search === true || searchScope === 'site';
-  const webSearchEnabled = !siteSearchEnabled && Boolean(env.WEBSEARCH || env.SEARXNG_URL);
+  const webSearchEnabled = !siteSearchEnabled && Boolean(env.TAVILY_API_KEY?.trim() || env.WEBSEARCH || env.SEARXNG_URL);
 
   try {
     if (siteSearchEnabled) {

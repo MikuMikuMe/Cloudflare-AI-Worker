@@ -6,7 +6,7 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`, including Server-Sent Events streaming with `stream: true`
-- Model-controlled live web tools exposed to chat completions through Cloudflare Web Search, with the configured SearXNG-compatible fallback
+- Model-controlled live web tools exposed to chat completions through Tavily, with Cloudflare Web Search and SearXNG-compatible fallbacks
 - Optional per-request search over the indexed `ai.lofuyu.com` website with `site_search: true`
 - `POST /v1/embeddings`
 - OpenAI-style API keys created and revoked from the authenticated dashboard
@@ -28,13 +28,16 @@ When the live Cloudflare Workers AI Neurons metric reaches the daily limit, all 
 When a live provider is configured, every `POST /v1/chat/completions` request exposes a server-owned web tool list to the selected model:
 
 1. The selected model receives `web_search` and `web_fetch` with normal optional tool semantics; it can answer directly without calling either tool.
-2. If the model emits a server-owned tool call, the Worker uses the managed Cloudflare Web Search binding when available, or the explicitly configured SearXNG-compatible fallback, then fetches selected public pages.
+2. If the model emits a server-owned tool call, the Worker uses Tavily when `TAVILY_API_KEY` is configured, then the managed Cloudflare Web Search binding or explicitly configured SearXNG-compatible fallback, and fetches selected public pages.
 3. The tool results are returned to the selected model for its final answer. If the model/runtime rejects the optional tool schema, the Worker retries without tools and never performs a forced search.
 
-The managed binding is zero-setup and discovery-only: it returns public URLs and catalog metadata, while the Worker fetches page content itself. It does not create an AI Search instance, container, database, or other service. If the account returns `account_disabled` for the experimental Cloudflare Web Search binding, the deployed code transparently falls back to the configured SearXNG endpoint. Every completion reports `web_search.performed`, the provider, executed query/result counts, and source URLs; streaming clients receive the same metadata in an empty-choice SSE chunk. The Worker never accepts client-defined executable functions; it only executes the two read-only web tools.
+Tavily advanced search is the primary provider and returns ranked public URLs/snippets; the Worker fetches selected pages itself through `web_fetch`. The managed Cloudflare binding is zero-setup and discovery-only, while SearXNG remains an optional legacy fallback. These paths do not create an AI Gateway, AI Search instance, container, database, or other service. Every completion reports `web_search.performed`, the provider, executed query/result counts, and source URLs; streaming clients receive the same metadata in an empty-choice SSE chunk. The Worker never accepts client-defined executable functions; it only executes the two read-only web tools.
 
 ```sh
-# Optional fallback only; this does not create a Cloudflare service.
+# Preferred live-web provider; keep the key server-side.
+npx wrangler secret put TAVILY_API_KEY
+
+# Optional legacy fallback only; this does not create a Cloudflare service.
 npx wrangler secret put SEARXNG_API_KEY   # only if your endpoint requires one
 # Set SEARXNG_URL as a Worker variable through your approved deployment path.
 ```
@@ -51,7 +54,7 @@ Example request (no search flag is needed):
 
 Use `site_search: true` (or `web_search_options: { "scope": "site" }`) to use the existing `lofuyu-web-search` AI Search crawler over `ai.lofuyu.com`. That crawler is a site index, not unrestricted internet search.
 
-`web_search_options.max_num_results` accepts 1-50 (Cloudflare Web Search returns at most 20; the fallback returns at most 10), and `max_fetch_chars` accepts 2,000-40,000.
+`web_search_options.max_num_results` accepts 1-50 (live providers are bounded to protect latency and provider quotas), and `max_fetch_chars` accepts 2,000-40,000. Tavily `advanced` search costs 2 API credits per search; its free plan is quota-limited.
 
 The selected chat model is also the tool-using model; there is no hidden planner model. The legacy `web_search` field is accepted for compatibility but no longer turns search on or off. Tool selection belongs to the model, just like OpenClaw/Hermes-style tool use.
 

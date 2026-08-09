@@ -5,6 +5,8 @@ export interface Env {
   DEFAULT_MODEL: string;
   /** Compatibility fallback for direct web-search helper callers without a selected model. */
   WEB_SEARCH_MODEL?: string;
+  /** Server-side Tavily live-search credential; never send this value to clients. */
+  TAVILY_API_KEY?: string;
   /** Optional zero-setup Cloudflare Web Search binding (discovery only). */
   WEBSEARCH?: WebSearch;
   /** Base URL of a SearXNG-compatible JSON search endpoint. */
