@@ -52,12 +52,60 @@ const STYLES = `
   select,input[type=text],textarea{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--fg);font-size:13.5px;font-family:inherit}
   select option:disabled{color:#667085;background:#11151d}
   select:focus,input:focus,textarea:focus{outline:none;border-color:var(--accent2)}
-  .chat{background:var(--panel);border:1px solid var(--line);border-radius:12px;height:400px;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:11px;margin-bottom:12px}
-  .msg{max-width:82%;padding:10px 14px;border-radius:11px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;word-wrap:break-word}
-  .msg.user{align-self:flex-end;background:#26365e;color:#e8eeff}
-  .msg.assistant{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
+  .chat-wrap{position:relative;margin-bottom:12px}
+  .chat{background:var(--panel);border:1px solid var(--line);border-radius:12px;height:clamp(420px,58vh,640px);overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
+  .chat-empty{margin:auto;text-align:center;color:var(--muted);font-size:13px;line-height:1.6;padding:30px}
+  .chat-empty b{display:block;color:var(--fg);font-size:14px;margin-bottom:3px}
+  .msg{max-width:84%;padding:11px 14px;border-radius:12px;font-size:13.5px;line-height:1.65;overflow-wrap:anywhere}
+  .msg.user{align-self:flex-end;background:#26365e;color:#e8eeff;white-space:pre-wrap}
+  .msg.assistant{align-self:flex-start;width:min(880px,94%);max-width:94%;background:var(--panel2);border:1px solid var(--line);padding:14px 16px}
+  .msg-content>:first-child{margin-top:0}.msg-content>:last-child{margin-bottom:0}
+  .msg-content p{margin:0 0 12px}
+  .msg-content h1,.msg-content h2,.msg-content h3,.msg-content h4{line-height:1.3;letter-spacing:-.01em;margin:18px 0 8px;color:#f0f3f9}
+  .msg-content h1{font-size:19px}.msg-content h2{font-size:17px}.msg-content h3{font-size:15px}.msg-content h4{font-size:13.5px}
+  .msg-content ul,.msg-content ol{margin:8px 0 13px;padding-left:23px}
+  .msg-content li{padding-left:2px;margin:4px 0}.msg-content li::marker{color:#aab7d0}
+  .msg-content strong{font-weight:700;color:#f2f4f8}.msg-content em{color:#cdd5e3}
+  .msg-content a{color:#8eb0ff;text-decoration:none;text-underline-offset:3px}.msg-content a:hover{text-decoration:underline}
+  .msg-content code{font-size:.9em;background:#10141d;border:1px solid #2b3445;border-radius:5px;padding:2px 5px;color:#e5c07b}
+  .msg-content pre{position:relative;background:#0d1118;border:1px solid #293143;border-radius:9px;padding:34px 13px 13px;margin:12px 0;overflow:auto;line-height:1.55}
+  .msg-content pre code{display:block;background:transparent;border:0;border-radius:0;padding:0;color:#dce3ef;font-size:12.5px;white-space:pre;overflow-wrap:normal}
+  .code-lang{position:absolute;top:8px;left:11px;color:#768198;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em}
+  .copy-code{position:absolute;top:6px;right:7px;border:1px solid #313a4d;background:#171d28;color:#aeb7c8;border-radius:6px;padding:3px 8px;font-size:10.5px;cursor:pointer}
+  .copy-code:hover{color:var(--fg);border-color:#46536c}
+  .msg-content blockquote{margin:12px 0;padding:4px 0 4px 13px;border-left:3px solid #536b9c;color:#bcc6d8}
+  .msg-content hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+  .table-scroll{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:8px}
+  .msg-content table{min-width:420px;font-size:12.5px}.msg-content th,.msg-content td{padding:8px 10px}.msg-content th{text-transform:none;letter-spacing:0;font-size:12px}
+  .citation{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin:0 1px;border-radius:99px;background:#263b65;color:#aecaFF!important;font-size:10.5px;font-weight:700;line-height:1;text-decoration:none!important;vertical-align:super}
+  .citation:hover{background:#355187;color:#e4ecff!important}
+  .message-status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;min-height:22px}
+  .message-status.error{color:#ffaaa4}
+  .spinner{width:13px;height:13px;border:2px solid #3c4558;border-top-color:#8eb0ff;border-radius:50%;animation:spin .75s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .search-card{margin-top:14px;border-top:1px solid #2a3242;padding-top:11px}
+  .search-card summary{display:flex;align-items:center;gap:9px;cursor:pointer;list-style:none;color:#cbd4e4;font-size:12.5px;user-select:none}
+  .search-card summary::-webkit-details-marker{display:none}
+  .search-icon{width:25px;height:25px;display:grid;place-items:center;border-radius:7px;background:#202d47;color:#9db9ef;flex:0 0 auto}
+  .search-icon svg{width:14px;height:14px}
+  .search-summary{min-width:0;flex:1}.search-summary b{display:block;font-size:12.5px;font-weight:650;color:#dce3ee}
+  .search-summary span{display:block;color:#7f8a9f;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .search-chevron{color:#778299;transition:transform .16s}.search-card[open] .search-chevron{transform:rotate(180deg)}
+  .search-details{padding:11px 0 1px 34px}
+  .query-list{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px}
+  .query-chip{max-width:100%;padding:3px 7px;border-radius:6px;background:#151b26;color:#8793a8;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .source-list{display:grid;gap:7px}
+  .source-link{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;padding:8px;border:1px solid #293244;border-radius:8px;background:#161c27;color:inherit!important;text-decoration:none!important}
+  .source-link:hover{border-color:#40506b;background:#192131}
+  .source-number{width:20px;height:20px;display:grid;place-items:center;border-radius:6px;background:#243657;color:#abc4f7;font-size:10px;font-weight:700}
+  .source-copy{display:block;min-width:0}.source-title{display:block;color:#dce3ef;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .source-host{display:block;color:#768198;font-size:10.5px;margin-top:1px}.source-snippet{color:#909caf;font-size:11px;line-height:1.45;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .source-empty{color:#7f8a9e;font-size:11.5px;padding:3px 0}
+  .jump-latest{position:absolute;right:16px;bottom:14px;display:none;align-items:center;gap:6px;border:1px solid #3b4962;background:#202a3a;color:#dce4f3;border-radius:99px;padding:6px 10px;font-size:11.5px;box-shadow:0 6px 20px #0007;cursor:pointer}
+  .jump-latest.show{display:flex}
   .composer{display:flex;gap:9px}
-  .search-status{color:var(--muted);font-size:12.5px;white-space:nowrap}
+  .search-status{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap}
+  .search-status::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px #3fb95018}
   .composer textarea{flex:1;resize:none;max-height:110px}
   .bars{display:flex;align-items:flex-end;gap:3px;height:110px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:11px}
   .bar{flex:1;background:linear-gradient(180deg,var(--accent),#a2521200);border-radius:3px 3px 0 0;min-height:2px}
@@ -76,6 +124,376 @@ const STYLES = `
   .cf-usage.setup .cf-usage-value{font-size:16px;color:#ffd28c;letter-spacing:0}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 18px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
   .toast.show{opacity:1}
+  @media(max-width:700px){
+    main{padding:20px 12px 50px}.top,.tabs{padding-left:14px;padding-right:14px}
+    #pane-play>.row>div:last-child{width:100%;flex-wrap:wrap}#model{min-width:0;flex:1}
+    .chat{height:55vh;padding:12px}.msg{max-width:94%}.msg.assistant{width:97%;max-width:97%;padding:12px 13px}
+    .search-details{padding-left:0}.composer .btn{padding-left:13px;padding-right:13px}
+  }
+`;
+
+/**
+ * Small, dependency-free Markdown subset for the authenticated playground.
+ * It escapes every model-provided value before adding markup, then allows only
+ * the elements emitted below. Exported as source so the exact browser renderer
+ * can be exercised in Node tests without maintaining a second implementation.
+ */
+export const PLAYGROUND_FORMATTER_SCRIPT = String.raw`
+function escapeMarkup(value){
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function safeHref(value){
+  try {
+    var rawHref = String(value).trim();
+    if (!rawHref || rawHref.length > 4096) return '';
+    var parsed = new URL(rawHref);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.href;
+  } catch(e) {
+    return '';
+  }
+}
+
+function normaliseSources(value){
+  return (Array.isArray(value) ? value : []).reduce(function(result, item, index){
+    var source = item && typeof item === 'object' ? item : {};
+    var href = safeHref(source.url || source.id || '');
+    if (!href) return result;
+    var parsed = new URL(href);
+    var title = typeof source.title === 'string' ? source.title.trim().slice(0, 240) : '';
+    var snippet = typeof source.snippet === 'string'
+      ? source.snippet.replace(/\s+/g, ' ').trim().slice(0, 600)
+      : '';
+    result.push({
+      number: index + 1,
+      url: href,
+      title: title || parsed.hostname.replace(/^www\./, '') || href,
+      host: parsed.hostname.replace(/^www\./, ''),
+      snippet: snippet
+    });
+    return result;
+  }, []);
+}
+
+function createSseDecoder(onEvent){
+  var buffer = '';
+  var done = false;
+
+  function processLine(line){
+    var value = String(line).trim();
+    if (!value || value.indexOf('data:') !== 0) return;
+    var payload = value.slice(5).trim();
+    if (payload === '[DONE]') {
+      done = true;
+      return;
+    }
+    if (!payload) return;
+    var event;
+    try { event = JSON.parse(payload); } catch(e) { return; }
+    if (event.error) {
+      throw new Error((event.error && event.error.message) || 'The model stream stopped unexpectedly.');
+    }
+    onEvent(event);
+  }
+
+  return {
+    push: function(value){
+      if (done || !value) return;
+      buffer += String(value);
+      var lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (var index = 0; index < lines.length && !done; index += 1) processLine(lines[index]);
+    },
+    finish: function(value){
+      if (done) return;
+      if (value) buffer += String(value);
+      if (buffer.trim()) processLine(buffer);
+      buffer = '';
+      if (!done) throw new Error('The response stream ended before completion.');
+    },
+    isDone: function(){ return done; }
+  };
+}
+
+function renderInline(value, sources, depth){
+  var text = String(value == null ? '' : value);
+  var sourceList = Array.isArray(sources) ? sources : [];
+  var level = Number(depth || 0);
+  if (level > 6) return escapeMarkup(text);
+  var html = '';
+  var i = 0;
+  var tick = String.fromCharCode(96);
+
+  while (i < text.length) {
+    if (text.charCodeAt(i) === 92 && i + 1 < text.length
+      && [92, 96, 42, 95, 91, 93, 40, 41, 126].indexOf(text.charCodeAt(i + 1)) !== -1) {
+      html += escapeMarkup(text.charAt(i + 1));
+      i += 2;
+      continue;
+    }
+
+    if (text.charAt(i) === tick) {
+      var codeEnd = text.indexOf(tick, i + 1);
+      if (codeEnd > i + 1) {
+        html += '<code>' + escapeMarkup(text.slice(i + 1, codeEnd)) + '</code>';
+        i = codeEnd + 1;
+        continue;
+      }
+    }
+
+    var paired = [
+      { marker: '**', tag: 'strong' },
+      { marker: '__', tag: 'strong' },
+      { marker: '~~', tag: 's' }
+    ];
+    var pairFound = false;
+    for (var p = 0; p < paired.length; p += 1) {
+      var pair = paired[p];
+      if (text.slice(i, i + pair.marker.length) !== pair.marker) continue;
+      var pairEnd = text.indexOf(pair.marker, i + pair.marker.length);
+      if (pairEnd <= i + pair.marker.length) continue;
+      html += '<' + pair.tag + '>'
+        + renderInline(text.slice(i + pair.marker.length, pairEnd), sourceList, level + 1)
+        + '</' + pair.tag + '>';
+      i = pairEnd + pair.marker.length;
+      pairFound = true;
+      break;
+    }
+    if (pairFound) continue;
+
+    if (text.charAt(i) === '*' || text.charAt(i) === '_') {
+      var emphasis = text.charAt(i);
+      var emphasisEnd = text.indexOf(emphasis, i + 1);
+      if (emphasisEnd > i + 1 && !/^\s|\s$/.test(text.slice(i + 1, emphasisEnd))) {
+        html += '<em>' + renderInline(text.slice(i + 1, emphasisEnd), sourceList, level + 1) + '</em>';
+        i = emphasisEnd + 1;
+        continue;
+      }
+    }
+
+    if (text.charAt(i) === '[') {
+      var labelEnd = text.indexOf(']', i + 1);
+      if (labelEnd > i + 1) {
+        var label = text.slice(i + 1, labelEnd);
+        if (text.charAt(labelEnd + 1) === '(') {
+          var hrefEnd = text.indexOf(')', labelEnd + 2);
+          if (hrefEnd > labelEnd + 2) {
+            var markdownHref = safeHref(text.slice(labelEnd + 2, hrefEnd).trim());
+            if (markdownHref) {
+              html += '<a href="' + escapeMarkup(markdownHref)
+                + '" target="_blank" rel="noopener noreferrer">'
+                + renderInline(label, sourceList, level + 1) + '</a>';
+              i = hrefEnd + 1;
+              continue;
+            }
+          }
+        }
+
+        var citation = /^(\d+)(?:\s*†\s*(.+))?$/.exec(label);
+        if (citation) {
+          var number = Number(citation[1]);
+          var source = number > 0
+            ? sourceList.find(function(item){ return item && item.number === number; })
+            : null;
+          var citationLabel = '[' + number + ']';
+          var citationTitle = source
+            ? 'Source ' + number + ': ' + source.title
+            : 'Source ' + number;
+          if (citation[2]) citationTitle += ' (' + citation[2] + ')';
+          if (source && source.url) {
+            html += '<a class="citation" href="' + escapeMarkup(source.url)
+              + '" target="_blank" rel="noopener noreferrer" aria-label="'
+              + escapeMarkup(citationTitle) + '" title="' + escapeMarkup(citationTitle) + '">'
+              + escapeMarkup(citationLabel) + '</a>';
+          } else {
+            html += '<span class="citation" title="' + escapeMarkup(citationTitle) + '">'
+              + escapeMarkup(citationLabel) + '</span>';
+          }
+          i = labelEnd + 1;
+          continue;
+        }
+      }
+    }
+
+    var urlMatch = /^(https?:\/\/[^\s<]+)/i.exec(text.slice(i));
+    if (urlMatch) {
+      var urlText = urlMatch[1];
+      while (/[.,!?;:]$/.test(urlText)) urlText = urlText.slice(0, -1);
+      if (urlText.charAt(urlText.length - 1) === ')' && urlText.indexOf('(') === -1) urlText = urlText.slice(0, -1);
+      var bareHref = safeHref(urlText);
+      if (bareHref) {
+        html += '<a href="' + escapeMarkup(bareHref) + '" target="_blank" rel="noopener noreferrer">'
+          + escapeMarkup(urlText) + '</a>';
+        i += urlText.length;
+        continue;
+      }
+    }
+
+    html += escapeMarkup(text.charAt(i));
+    i += 1;
+  }
+  return html;
+}
+
+function tableCells(line){
+  return String(line).trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(cell){
+    return cell.trim();
+  });
+}
+
+function isTableDivider(line){
+  var cells = tableCells(line);
+  return cells.length > 0 && cells.every(function(cell){ return /^:?-{3,}:?$/.test(cell); });
+}
+
+function listItem(line){
+  var unordered = /^ {0,3}[-+*]\s+(.+)$/.exec(line);
+  if (unordered) return { ordered: false, content: unordered[1], start: 1 };
+  var ordered = /^ {0,3}(\d+)[.)]\s+(.+)$/.exec(line);
+  if (ordered) return { ordered: true, content: ordered[2], start: Number(ordered[1]) || 1 };
+  return null;
+}
+
+function isBlockStart(lines, index){
+  var line = lines[index] || '';
+  var trimmed = line.trim();
+  var fence = String.fromCharCode(96, 96, 96);
+  return trimmed.indexOf(fence) === 0
+    || trimmed.indexOf('~~~') === 0
+    || /^#{1,6}\s+/.test(trimmed)
+    || /^>\s?/.test(trimmed)
+    || /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)
+    || Boolean(listItem(line));
+}
+
+function renderMarkdown(value, sources){
+  var text = String(value == null ? '' : value).replace(/\r\n?/g, '\n');
+  if (!text.trim()) return '';
+  var sourceList = Array.isArray(sources) ? sources : [];
+  var lines = text.split('\n');
+  var output = [];
+  var i = 0;
+  var fence = String.fromCharCode(96, 96, 96);
+
+  while (i < lines.length) {
+    if (!lines[i].trim()) {
+      i += 1;
+      continue;
+    }
+
+    var trimmed = lines[i].trim();
+    var marker = trimmed.indexOf(fence) === 0 ? fence : (trimmed.indexOf('~~~') === 0 ? '~~~' : '');
+    if (marker) {
+      var language = trimmed.slice(marker.length).trim().replace(/[^A-Za-z0-9_.+-]/g, '').slice(0, 24);
+      var code = [];
+      i += 1;
+      while (i < lines.length && lines[i].trim().indexOf(marker) !== 0) {
+        code.push(lines[i]);
+        i += 1;
+      }
+      if (i < lines.length) i += 1;
+      output.push('<pre>'
+        + (language ? '<span class="code-lang">' + escapeMarkup(language) + '</span>' : '')
+        + '<code data-language="' + escapeMarkup(language) + '">' + escapeMarkup(code.join('\n')) + '</code></pre>');
+      continue;
+    }
+
+    var heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      var headingLevel = Math.min(4, heading[1].length);
+      output.push('<h' + headingLevel + '>' + renderInline(heading[2], sourceList, 0) + '</h' + headingLevel + '>');
+      i += 1;
+      continue;
+    }
+
+    if (/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[i])) {
+      output.push('<hr>');
+      i += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      var quote = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*>\s?/, ''));
+        i += 1;
+      }
+      output.push('<blockquote>' + renderMarkdown(quote.join('\n'), sourceList) + '</blockquote>');
+      continue;
+    }
+
+    var firstItem = listItem(lines[i]);
+    if (firstItem) {
+      var ordered = firstItem.ordered;
+      var tag = ordered ? 'ol' : 'ul';
+      var start = ordered && firstItem.start !== 1 ? ' start="' + firstItem.start + '"' : '';
+      var items = [];
+      while (i < lines.length) {
+        var item = listItem(lines[i]);
+        if (!item || item.ordered !== ordered) break;
+        var itemText = item.content;
+        i += 1;
+        while (i < lines.length && lines[i].trim() && !listItem(lines[i]) && /^\s{2,}/.test(lines[i])) {
+          itemText += ' ' + lines[i].trim();
+          i += 1;
+        }
+        items.push('<li>' + renderInline(itemText, sourceList, 0) + '</li>');
+        if (i < lines.length && !lines[i].trim()) {
+          var next = i + 1;
+          while (next < lines.length && !lines[next].trim()) next += 1;
+          var nextItem = next < lines.length ? listItem(lines[next]) : null;
+          if (!nextItem || nextItem.ordered !== ordered) break;
+          i = next;
+        }
+      }
+      output.push('<' + tag + start + '>' + items.join('') + '</' + tag + '>');
+      continue;
+    }
+
+    if (i + 1 < lines.length && lines[i].indexOf('|') !== -1 && isTableDivider(lines[i + 1])) {
+      var headers = tableCells(lines[i]);
+      var dividers = tableCells(lines[i + 1]);
+      var aligns = dividers.map(function(cell){
+        return cell.charAt(0) === ':' && cell.charAt(cell.length - 1) === ':' ? 'center'
+          : (cell.charAt(cell.length - 1) === ':' ? 'right' : 'left');
+      });
+      i += 2;
+      var bodyRows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') !== -1) {
+        bodyRows.push(tableCells(lines[i]));
+        i += 1;
+      }
+      var headHtml = headers.map(function(cell, index){
+        return '<th style="text-align:' + (aligns[index] || 'left') + '">' + renderInline(cell, sourceList, 0) + '</th>';
+      }).join('');
+      var bodyHtml = bodyRows.map(function(row){
+        return '<tr>' + headers.map(function(_header, index){
+          return '<td style="text-align:' + (aligns[index] || 'left') + '">'
+            + renderInline(row[index] || '', sourceList, 0) + '</td>';
+        }).join('') + '</tr>';
+      }).join('');
+      output.push('<div class="table-scroll"><table><thead><tr>' + headHtml
+        + '</tr></thead><tbody>' + bodyHtml + '</tbody></table></div>');
+      continue;
+    }
+
+    var paragraph = [lines[i].trim()];
+    i += 1;
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines, i)
+      && !(i + 1 < lines.length && lines[i].indexOf('|') !== -1 && isTableDivider(lines[i + 1]))) {
+      paragraph.push(lines[i].trim());
+      i += 1;
+    }
+    output.push('<p>' + paragraph.map(function(line){ return renderInline(line, sourceList, 0); }).join('<br>') + '</p>');
+  }
+
+  return output.join('');
+}
 `;
 
 export function dashboardPage(email: string, teamDomain: string): string {
@@ -118,11 +536,16 @@ export function dashboardPage(email: string, teamDomain: string): string {
       <div><h2>Playground</h2><div class="hint">Streams through <code>/v1/chat/completions</code> using your Access session — no key needed here.</div></div>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="model"></select>
-        <span class="search-status" title="The selected model can call server-managed web tools when needed">Live web tools · model decides</span>
+        <span class="search-status" title="The selected model can call server-managed web tools when needed">Web tools automatic</span>
         <button class="btn ghost" id="clear">Clear</button>
       </div>
     </div>
-    <div class="chat" id="chat"></div>
+    <div class="chat-wrap">
+      <div class="chat" id="chat" role="log" aria-live="polite" aria-relevant="additions text">
+        <div class="chat-empty"><b>Start a conversation</b>Answers can include formatted text, code, and cited web sources.</div>
+      </div>
+      <button class="jump-latest" id="jump-latest" type="button" aria-label="Jump to the latest message">↓ Latest</button>
+    </div>
     <div class="composer">
       <textarea id="prompt" rows="1" placeholder="Ask something… (Enter to send, Shift+Enter for newline)"></textarea>
       <button class="btn" id="send">Send</button>
@@ -156,6 +579,8 @@ function esc(s){
 }
 function fmtDate(ms){ return ms ? new Date(ms).toLocaleString() : '—'; }
 function fmtNum(n){ return (n || 0).toLocaleString(); }
+
+${PLAYGROUND_FORMATTER_SCRIPT}
 
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tab').forEach(function(tab){
@@ -242,14 +667,250 @@ $('#new-key').onclick = function(){
 
 /* ---------- playground ---------- */
 var chatHistory = [];
+var activeRequest = null;
+var autoFollow = true;
+
+function renderChatEmpty(){
+  $('#chat').innerHTML = '<div class="chat-empty"><b>Start a conversation</b>Answers can include formatted text, code, and cited web sources.</div>';
+}
+
+function nearChatBottom(){
+  var chat = $('#chat');
+  return chat.scrollHeight - chat.scrollTop - chat.clientHeight < 90;
+}
+
+function updateJumpButton(){
+  var hasOverflow = $('#chat').scrollHeight > $('#chat').clientHeight + 20;
+  $('#jump-latest').classList.toggle('show', hasOverflow && !autoFollow);
+}
+
+function scrollChat(force){
+  if (force) autoFollow = true;
+  requestAnimationFrame(function(){
+    if (autoFollow) $('#chat').scrollTop = $('#chat').scrollHeight;
+    updateJumpButton();
+  });
+}
+
+$('#chat').addEventListener('scroll', function(){
+  autoFollow = nearChatBottom();
+  updateJumpButton();
+});
+
+$('#jump-latest').onclick = function(){ scrollChat(true); };
 
 function addBubble(role, text){
+  var empty = $('#chat .chat-empty');
+  if (empty) empty.remove();
   var d = document.createElement('div');
   d.className = 'msg ' + role;
-  d.textContent = text;
+  d.setAttribute('aria-label', role === 'user' ? 'You' : 'Assistant');
+  var content = document.createElement('div');
+  content.className = 'msg-content';
+  if (role === 'assistant') content.innerHTML = renderMarkdown(text, []);
+  else content.textContent = text;
+  d.appendChild(content);
   $('#chat').appendChild(d);
-  $('#chat').scrollTop = $('#chat').scrollHeight;
+  scrollChat(true);
   return d;
+}
+
+function messageStatus(bubble, text, kind, spinning){
+  var status = bubble.querySelector('.message-status');
+  if (!text) {
+    if (status) status.remove();
+    return;
+  }
+  if (!status) {
+    status = document.createElement('div');
+    status.className = 'message-status';
+    status.setAttribute('role', 'status');
+    bubble.insertBefore(status, bubble.firstChild);
+  }
+  status.className = 'message-status' + (kind ? ' ' + kind : '');
+  status.innerHTML = '';
+  if (spinning) {
+    var spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    status.appendChild(spinner);
+  }
+  var label = document.createElement('span');
+  label.textContent = text;
+  status.appendChild(label);
+}
+
+function copyText(value){
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(value);
+  var input = document.createElement('textarea');
+  input.value = value;
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand('copy');
+  input.remove();
+  return Promise.resolve();
+}
+
+function enhanceCodeBlocks(container){
+  container.querySelectorAll('pre').forEach(function(pre){
+    var code = pre.querySelector('code');
+    if (!code || pre.querySelector('.copy-code')) return;
+    var button = document.createElement('button');
+    button.className = 'copy-code';
+    button.type = 'button';
+    button.textContent = 'Copy';
+    button.setAttribute('aria-label', 'Copy code');
+    button.onclick = function(){
+      copyText(code.textContent || '').then(function(){
+        button.textContent = 'Copied';
+        setTimeout(function(){ button.textContent = 'Copy'; }, 1200);
+      }).catch(function(){ toast('Could not copy code'); });
+    };
+    pre.appendChild(button);
+  });
+}
+
+function providerName(value){
+  return value === 'tavily' ? 'Tavily'
+    : value === 'cloudflare' ? 'Cloudflare'
+    : value === 'searxng' ? 'SearXNG'
+    : 'Web';
+}
+
+function searchCard(webSearch, sources){
+  if (!webSearch) return null;
+  var queries = Array.isArray(webSearch.queries) ? webSearch.queries : [];
+  var totalResults = queries.reduce(function(total, query){
+    var count = Number(query && query.result_count);
+    return total + (Number.isFinite(count) && count > 0 ? count : 0);
+  }, 0);
+
+  var details = document.createElement('details');
+  details.className = 'search-card';
+  var summary = document.createElement('summary');
+
+  var icon = document.createElement('span');
+  icon.className = 'search-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>';
+  summary.appendChild(icon);
+
+  var copy = document.createElement('span');
+  copy.className = 'search-summary';
+  var title = document.createElement('b');
+  title.textContent = 'Searched the web';
+  var metadata = document.createElement('span');
+  var bits = [providerName(webSearch.provider)];
+  if (queries.length) bits.push(totalResults + ' result' + (totalResults === 1 ? '' : 's'));
+  bits.push(sources.length + ' source' + (sources.length === 1 ? '' : 's'));
+  metadata.textContent = bits.join(' · ');
+  copy.appendChild(title);
+  copy.appendChild(metadata);
+  summary.appendChild(copy);
+
+  var chevron = document.createElement('span');
+  chevron.className = 'search-chevron';
+  chevron.textContent = '⌄';
+  chevron.setAttribute('aria-hidden', 'true');
+  summary.appendChild(chevron);
+  details.appendChild(summary);
+
+  var body = document.createElement('div');
+  body.className = 'search-details';
+  if (queries.length) {
+    var queryList = document.createElement('div');
+    queryList.className = 'query-list';
+    queries.forEach(function(query){
+      if (!query || typeof query.query !== 'string' || !query.query.trim()) return;
+      var chip = document.createElement('span');
+      chip.className = 'query-chip';
+      chip.textContent = query.query.trim().slice(0, 240);
+      chip.title = query.query.trim().slice(0, 500);
+      queryList.appendChild(chip);
+    });
+    if (queryList.childNodes.length) body.appendChild(queryList);
+  }
+
+  if (sources.length) {
+    var list = document.createElement('div');
+    list.className = 'source-list';
+    sources.forEach(function(source, index){
+      var link = document.createElement('a');
+      link.className = 'source-link';
+      link.href = source.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+
+      var number = document.createElement('span');
+      number.className = 'source-number';
+      number.textContent = String(source.number || index + 1);
+      link.appendChild(number);
+
+      var sourceCopy = document.createElement('span');
+      sourceCopy.className = 'source-copy';
+      var sourceTitle = document.createElement('span');
+      sourceTitle.className = 'source-title';
+      sourceTitle.textContent = source.title;
+      sourceCopy.appendChild(sourceTitle);
+      var host = document.createElement('span');
+      host.className = 'source-host';
+      host.textContent = source.host;
+      sourceCopy.appendChild(host);
+      if (source.snippet) {
+        var snippet = document.createElement('span');
+        snippet.className = 'source-snippet';
+        snippet.textContent = source.snippet;
+        sourceCopy.appendChild(snippet);
+      }
+      link.appendChild(sourceCopy);
+      list.appendChild(link);
+    });
+    body.appendChild(list);
+  } else {
+    var noSources = document.createElement('div');
+    noSources.className = 'source-empty';
+    noSources.textContent = 'The search returned no usable source links.';
+    body.appendChild(noSources);
+  }
+  details.appendChild(body);
+  return details;
+}
+
+function renderAssistant(bubble, text, sources, webSearch, pending){
+  var content = bubble.querySelector('.msg-content');
+  content.innerHTML = renderMarkdown(text, sources);
+  enhanceCodeBlocks(content);
+
+  var oldCard = bubble.querySelector('.search-card');
+  var cardSignature = webSearch
+    ? JSON.stringify([webSearch.provider, webSearch.queries, sources.map(function(source){ return source.url; })])
+    : '';
+  if (bubble.searchCardSignature !== cardSignature) {
+    var cardWasOpen = Boolean(oldCard && oldCard.open);
+    if (oldCard) oldCard.remove();
+    var card = searchCard(webSearch, sources);
+    if (card) {
+      card.open = cardWasOpen;
+      bubble.appendChild(card);
+    }
+    bubble.searchCardSignature = cardSignature;
+  }
+
+  if (pending && !text) {
+    messageStatus(
+      bubble,
+      webSearch && sources.length
+        ? 'Preparing an answer from ' + sources.length + ' source' + (sources.length === 1 ? '' : 's') + '…'
+        : 'Thinking…',
+      '',
+      true
+    );
+  } else {
+    messageStatus(bubble, '', '', false);
+  }
+  scrollChat(false);
 }
 
 function loadModels(){
@@ -272,11 +933,23 @@ function loadModels(){
 
 loadModels();
 
-$('#clear').onclick = function(){ chatHistory = []; $('#chat').innerHTML = ''; };
+$('#clear').onclick = function(){
+  if (activeRequest) activeRequest.controller.abort();
+  activeRequest = null;
+  chatHistory = [];
+  autoFollow = true;
+  renderChatEmpty();
+  $('#send').disabled = false;
+  $('#model').disabled = false;
+  $('#chat').setAttribute('aria-busy', 'false');
+  updateJumpButton();
+};
 
-function send(){
+async function send(){
+  if ($('#send').disabled) return;
   var text = $('#prompt').value.trim();
   if (!text) return;
+  if (!$('#model').value) { toast('Choose an available model first'); return; }
   $('#prompt').value = ''; $('#prompt').style.height = 'auto';
   addBubble('user', text);
   chatHistory.push({ role: 'user', content: text });
@@ -285,69 +958,94 @@ function send(){
   var acc = '';
   var sources = [];
   var webSearch = null;
+  var pending = true;
+  var assistantStored = false;
+  var renderFrame = 0;
+  var controller = new AbortController();
+  var request = { controller: controller, bubble: out };
+  activeRequest = request;
   $('#send').disabled = true;
+  $('#model').disabled = true;
+  $('#chat').setAttribute('aria-busy', 'true');
+  renderAssistant(out, acc, sources, webSearch, pending);
 
-  function searchFooter(){
-    if (!webSearch) return '';
-    var queries = Array.isArray(webSearch.queries) ? webSearch.queries : [];
-    var queryText = queries.map(function(q){
-      var count = typeof q.result_count === 'number' ? q.result_count : 0;
-      return (q.query || 'query') + ' (' + count + ' result' + (count === 1 ? '' : 's') + ')';
-    }).join('; ');
-    var footer = 'Web search: ' + (webSearch.provider || 'server') + (queryText ? ' · ' + queryText : '');
-    if (sources.length) {
-      footer += String.fromCharCode(10, 10) + 'Sources:' + String.fromCharCode(10)
-        + sources.map(function(s, i){ return '[' + (i + 1) + '] ' + (s.url || s.id || 'source'); }).join(String.fromCharCode(10));
-    } else {
-      footer += String.fromCharCode(10, 10) + 'No usable source URLs were returned.';
-    }
-    return footer;
+  function scheduleRender(){
+    if (renderFrame) return;
+    renderFrame = requestAnimationFrame(function(){
+      renderFrame = 0;
+      renderAssistant(out, acc, sources, webSearch, pending);
+    });
   }
 
-  fetch('/admin/api/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: $('#model').value, messages: chatHistory, stream: true })
-  }).then(function(res){
-    if (!res.ok) return res.json().then(function(e){ throw new Error((e.error && e.error.message) || 'Request failed'); });
+  function flushRender(){
+    if (renderFrame) cancelAnimationFrame(renderFrame);
+    renderFrame = 0;
+    renderAssistant(out, acc, sources, webSearch, pending);
+  }
+
+  function handleStreamEvent(event){
+    if (event.web_search) {
+      webSearch = event.web_search;
+      if (Array.isArray(event.web_search.sources)) sources = normaliseSources(event.web_search.sources);
+      scheduleRender();
+    }
+    var piece = event.choices && event.choices[0] && event.choices[0].delta && event.choices[0].delta.content;
+    if (typeof piece === 'string' && piece) {
+      acc += piece;
+      scheduleRender();
+    }
+  }
+
+  try {
+    var res = await fetch('/admin/api/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: $('#model').value, messages: chatHistory, stream: true }),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      var errorBody = null;
+      try { errorBody = await res.json(); } catch(e) {}
+      var errorMessage = errorBody && ((errorBody.error && errorBody.error.message) || errorBody.message || errorBody.error);
+      throw new Error(typeof errorMessage === 'string' ? errorMessage : 'Request failed (' + res.status + ')');
+    }
+    if (!res.body) throw new Error('The response did not include a readable stream.');
     var reader = res.body.getReader();
     var dec = new TextDecoder();
-    var buf = '';
-    function pump(){
-      return reader.read().then(function(step){
-        if (step.done){
-          chatHistory.push({ role: 'assistant', content: acc });
-          var footer = searchFooter();
-          if (footer) out.textContent = acc + String.fromCharCode(10, 10) + footer;
-          $('#send').disabled = false;
-          return;
-        }
-        buf += dec.decode(step.value, { stream: true });
-        var lines = buf.split('\\n');
-        buf = lines.pop();
-        lines.forEach(function(line){
-          line = line.trim();
-          if (!line || line.indexOf('data:') !== 0) return;
-          var payload = line.slice(5).trim();
-          if (payload === '[DONE]') return;
-          try {
-            var j = JSON.parse(payload);
-            if (j.web_search) {
-              webSearch = j.web_search;
-              if (Array.isArray(j.web_search.sources)) sources = j.web_search.sources;
-            }
-            var piece = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
-            if (piece){ acc += piece; out.textContent = acc; $('#chat').scrollTop = $('#chat').scrollHeight; }
-          } catch(e){}
-        });
-        return pump();
-      });
+    var sseDecoder = createSseDecoder(handleStreamEvent);
+    while (!sseDecoder.isDone()) {
+      var step = await reader.read();
+      if (step.done) break;
+      sseDecoder.push(dec.decode(step.value, { stream: true }));
     }
-    return pump();
-  }).catch(function(err){
-    out.textContent = 'Error: ' + err.message;
-    $('#send').disabled = false;
-  });
+    sseDecoder.finish(dec.decode());
+
+    pending = false;
+    flushRender();
+    if (acc) {
+      chatHistory.push({ role: 'assistant', content: acc });
+      assistantStored = true;
+    }
+    else messageStatus(out, 'No answer was returned.', 'error', false);
+  } catch(err) {
+    if (controller.signal.aborted || (err && err.name === 'AbortError')) return;
+    pending = false;
+    flushRender();
+    if (acc && !assistantStored) {
+      chatHistory.push({ role: 'assistant', content: acc });
+      assistantStored = true;
+    }
+    messageStatus(out, 'Response interrupted: ' + (err && err.message ? err.message : 'Unknown error'), 'error', false);
+    scrollChat(false);
+  } finally {
+    if (activeRequest === request) {
+      activeRequest = null;
+      $('#send').disabled = false;
+      $('#model').disabled = false;
+      $('#chat').setAttribute('aria-busy', 'false');
+      $('#prompt').focus();
+    }
+  }
 }
 
 $('#send').onclick = send;

@@ -347,6 +347,7 @@ test('the playground and public docs do not present web search as an option', ()
   assert.doesNotMatch(dashboard, /web_search: \$\('#web-search'\)/);
   assert.doesNotMatch(landing, /Opt-in web search/i);
   assert.doesNotMatch(landing, /"web_search":true/);
-  assert.match(dashboard, /Web search:/);
+  assert.match(dashboard, /Searched the web/);
+  assert.match(dashboard, /normaliseSources/);
   assert.match(dashboard, /result_count/);
 });
