@@ -1,5 +1,5 @@
 /**
- * Cloudflare AI Worker — an OpenAI-compatible gateway over Workers AI.
+ * Cloudflare AI Worker — OpenAI- and Anthropic-compatible APIs over Workers AI.
  *
  * Routing map
  *   /                       public landing page + docs
@@ -7,6 +7,8 @@
  *   /v1/models              OpenAI: list models
  *   /v1/chat/completions    OpenAI: chat, buffered or SSE-streamed
  *   /v1/embeddings          OpenAI: embeddings
+ *   /v1/messages            Anthropic: messages, buffered or SSE-streamed
+ *   /v1/messages/count_tokens  Anthropic: estimated input token count
  *   /admin                  dashboard, behind Cloudflare Access
  *   /admin/api/*            dashboard JSON API, behind Cloudflare Access
  *
@@ -22,6 +24,7 @@ import { isAccessConfigured, verifyAccessJwt } from './lib/access';
 import { API_CORS, apiError, html, json } from './lib/http';
 import { handleAdminApi } from './routes/admin';
 import { refreshNvidiaModelIndex } from './lib/nvidia';
+import { handleAnthropicMessages, handleAnthropicTokenCount } from './routes/anthropic';
 import { handleChatCompletions, handleEmbeddings, handleModels } from './routes/v1';
 import { dashboardPage } from './ui/dashboard';
 import { landingPage } from './ui/landing';
@@ -69,7 +72,7 @@ export default {
       );
     }
 
-    // ---- OpenAI-compatible API -------------------------------------------
+    // ---- OpenAI- and Anthropic-compatible APIs ---------------------------
     if (path === '/v1/models' && method === 'GET') {
       return handleModels(env);
     }
@@ -84,9 +87,17 @@ export default {
       return handleEmbeddings(request, env, ctx);
     }
 
+    if (path === '/v1/messages') {
+      return handleAnthropicMessages(request, env, ctx);
+    }
+
+    if (path === '/v1/messages/count_tokens') {
+      return handleAnthropicTokenCount(request, env);
+    }
+
     if (path.startsWith('/v1/')) {
       return apiError(
-        `Unknown endpoint ${path}. This gateway implements /v1/models, /v1/chat/completions and /v1/embeddings.`,
+        `Unknown endpoint ${path}. This gateway implements /v1/models, /v1/chat/completions, /v1/embeddings, /v1/messages and /v1/messages/count_tokens.`,
         404,
         'not_found_error',
       );

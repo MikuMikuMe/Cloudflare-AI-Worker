@@ -1,7 +1,30 @@
 export const API_CORS: HeadersInit = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
-  'access-control-allow-headers': 'Authorization, Content-Type',
+  'access-control-allow-headers': [
+    'Authorization',
+    'Content-Type',
+    'X-API-Key',
+    'Anthropic-Version',
+    'Anthropic-Beta',
+    'Anthropic-Dangerous-Direct-Browser-Access',
+    'X-Stainless-Lang',
+    'X-Stainless-Package-Version',
+    'X-Stainless-OS',
+    'X-Stainless-Arch',
+    'X-Stainless-Runtime',
+    'X-Stainless-Runtime-Version',
+    'X-Stainless-Retry-Count',
+    'X-Stainless-Timeout',
+    'X-Stainless-Helper',
+    'X-Stainless-Helper-Method',
+  ].join(', '),
+  'access-control-expose-headers': [
+    'Request-Id',
+    'X-AI-Provider-Fallback-From',
+    'X-AI-Provider-Fallback-To',
+    'X-AI-Provider-Fallback-Reason',
+  ].join(', '),
   'access-control-max-age': '86400',
 };
 

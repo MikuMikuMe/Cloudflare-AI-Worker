@@ -165,9 +165,11 @@ export function resolveChatModel(
   const alias = OPENAI_ALIASES[requested.toLowerCase()];
   if (alias) return alias;
 
-  // Some SDKs send a dated OpenAI model identifier. Keep those requests
-  // compatible without accepting arbitrary names as Workers AI IDs.
-  if (/^(gpt|o)[-_]/i.test(requested) && CHAT_MODELS.includes(fallback.trim())) return fallback.trim();
+  // Some SDKs send provider-style model identifiers. Keep recognized OpenAI
+  // and Anthropic names compatible without accepting arbitrary model IDs.
+  if (/^(?:(?:gpt|o)[-_]|claude[-_])/i.test(requested) && CHAT_MODELS.includes(fallback.trim())) {
+    return fallback.trim();
+  }
   return null;
 }
 

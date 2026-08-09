@@ -550,7 +550,7 @@ export function dashboardPage(email: string, teamDomain: string): string {
 <div class="top">
   <div class="brand">
     <div class="logo">AI</div>
-    <div><h1>Cloudflare AI Worker</h1><div class="sub">OpenAI-compatible gateway</div></div>
+    <div><h1>Cloudflare AI Worker</h1><div class="sub">OpenAI- and Anthropic-compatible gateway</div></div>
   </div>
   <div class="who">
     <span>Signed in as <b>${escapeHtml(email)}</b></span>
@@ -567,7 +567,7 @@ export function dashboardPage(email: string, teamDomain: string): string {
 <main>
   <section class="pane" id="pane-keys" role="tabpanel" aria-labelledby="tab-keys">
     <div class="row">
-      <div><h2>API Keys</h2><div class="hint">Use these as the <code>Authorization: Bearer</code> value with any OpenAI SDK.</div></div>
+      <div><h2>API Keys</h2><div class="hint">Use these with either <code>Authorization: Bearer</code> or Anthropic's <code>x-api-key</code> header.</div></div>
       <button class="btn" id="new-key">+ Create key</button>
     </div>
     <div id="reveal-slot"></div>

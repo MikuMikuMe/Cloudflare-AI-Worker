@@ -34,23 +34,23 @@ export function landingPage(origin: string): string {
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Cloudflare AI Worker — OpenAI-compatible API</title>
+<title>Cloudflare AI Worker — OpenAI and Anthropic APIs</title>
 <style>${STYLES}</style>
 </head><body><div class="wrap">
 
 <header>
   <div class="brand">
     <div class="logo">AI</div>
-    <div><h1>Cloudflare AI Worker</h1><div class="sub">OpenAI-compatible gateway on Workers AI</div></div>
+    <div><h1>Cloudflare AI Worker</h1><div class="sub">OpenAI- and Anthropic-compatible gateway</div></div>
   </div>
   <a class="btn" href="/admin">Sign in &rarr;</a>
 </header>
 
 <div class="hero">
-  <h2>Drop-in OpenAI API, running on the edge</h2>
-  <p>Point any OpenAI SDK at this host, use a key you minted yourself, and you're done. Streaming, embeddings, model listing and model-controlled web tools all fit the OpenAI chat-completions shape.</p>
+  <h2>OpenAI and Anthropic formats, running on the edge</h2>
+  <p>Point either official SDK at this host and use a key you minted yourself. Both API formats share the same Workers AI models, true streaming, usage tracking and optional NVIDIA catalog.</p>
   <div style="margin-top:16px">
-    <span class="tag">SSE streaming</span><span class="tag">Model-controlled web tools</span><span class="tag">Cloudflare Access SSO</span><span class="tag">Self-service keys</span><span class="tag">Usage tracking</span>
+    <span class="tag">OpenAI + Anthropic</span><span class="tag">SSE streaming</span><span class="tag">Model-controlled web tools</span><span class="tag">Cloudflare Access SSO</span><span class="tag">Self-service keys</span><span class="tag">Usage tracking</span>
   </div>
 </div>
 
@@ -66,6 +66,8 @@ export function landingPage(origin: string): string {
   <tr><td>GET</td><td><code>/v1/models</code></td><td>List available models</td></tr>
   <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>Chat, streaming, buffered, live web or site search</td></tr>
   <tr><td>POST</td><td><code>/v1/embeddings</code></td><td>Text embeddings</td></tr>
+  <tr><td>POST</td><td><code>/v1/messages</code></td><td>Anthropic Messages, buffered or named-event SSE</td></tr>
+  <tr><td>POST</td><td><code>/v1/messages/count_tokens</code></td><td>Estimated Anthropic input tokens</td></tr>
   <tr><td>GET</td><td><code>/health</code></td><td>Liveness probe</td></tr>
 </table>
 
@@ -102,6 +104,23 @@ const stream = await client.chat.completions.create({
 for await (const chunk of stream) {
   process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
 }</code></pre>
+
+<h4>Anthropic Node.js</h4>
+<pre><code>import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  apiKey: "sk-cfai-...",
+  baseURL: "${origin}",
+});
+
+const stream = client.messages.stream({
+  model: "@cf/meta/llama-3.1-8b-instruct-fp8",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Explain edge computing in one line." }],
+});
+
+stream.on("text", (text) => process.stdout.write(text));
+await stream.finalMessage();</code></pre>
 
 <h4>curl</h4>
 <pre><code>curl ${origin}/v1/chat/completions \\

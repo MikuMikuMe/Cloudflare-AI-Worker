@@ -1,6 +1,6 @@
 # Cloudflare AI Worker
 
-A Cloudflare-hosted chat app and OpenAI-compatible API. The Cloudflare Access-authenticated dashboard stores conversations in D1 so users can resume chats on another device, while `/v1/chat/completions` remains stateless.
+A Cloudflare-hosted chat app with OpenAI- and Anthropic-compatible APIs. The Cloudflare Access-authenticated dashboard stores conversations in D1 so users can resume chats on another device, while the public API endpoints remain stateless.
 
 - Production: [ai.lofuyu.com](https://ai.lofuyu.com/)
 - Dashboard: [ai.lofuyu.com/admin](https://ai.lofuyu.com/admin)
@@ -15,10 +15,12 @@ A Cloudflare-hosted chat app and OpenAI-compatible API. The Cloudflare Access-au
 | `GET /v1/models` | Public | Current Workers AI and optional NVIDIA model catalog |
 | `POST /v1/chat/completions` | API key or Cloudflare Access session | Stateless; buffered and SSE responses |
 | `POST /v1/embeddings` | API key or Cloudflare Access session | Stateless |
+| `POST /v1/messages` | API key or Cloudflare Access session | Anthropic Messages; buffered and SSE responses |
+| `POST /v1/messages/count_tokens` | API key or Cloudflare Access session | Estimated Anthropic input-token count |
 | `/admin` | Cloudflare Access | Dashboard for Chats, API keys, and usage |
 | `/admin/api/*` | Cloudflare Access; same-origin only | D1-backed dashboard data, including conversations |
 
-The dashboard includes cross-device Chats, paginated transcripts, rename and delete controls, deep links, rich Markdown, compact linked citations and source cards, and recovery of interrupted generations. Users can also create and revoke OpenAI-style API keys. Full plaintext keys are never stored; D1 keeps a SHA-256 hash and a short display prefix.
+The dashboard includes cross-device Chats, paginated transcripts, rename and delete controls, deep links, rich Markdown, compact linked citations and source cards, and recovery of interrupted generations. Users can also create and revoke API keys that work with either API format. Full plaintext keys are never stored; D1 keeps a SHA-256 hash and a short display prefix.
 
 ## Persistent chats, privacy, and current limits
 
@@ -28,7 +30,7 @@ D1 is the canonical store for conversation titles, selected models, ordered mess
 
 Current limits:
 
-- `/v1/chat/completions` is stateless. Persistence exists only for dashboard Chats under `/admin/api/conversations/*`.
+- `/v1/chat/completions` and `/v1/messages` are stateless. Persistence exists only for dashboard Chats under `/admin/api/conversations/*`.
 - The current release does not live-mirror an in-progress stream between devices. Another device sees it after the turn is committed and refreshed.
 - Long-term personal memory is not implemented. Chat history is an exact user-visible record, not an automatically derived profile.
 - Chats remain until the user deletes them. Deleting a conversation cascades to its messages; there is no automatic retention policy today.
@@ -89,7 +91,7 @@ npm audit --package-lock-only --audit-level=high
 | `ACCESS_TEAM_DOMAIN` | Cloudflare Access team domain used to validate JWTs |
 | `ACCESS_AUD` | Access application audience; also part of the chat-history namespace |
 | `CLOUDFLARE_ACCOUNT_ID` | Account queried for Workers AI usage; required with the usage token |
-| `DEFAULT_MODEL` | Fallback model for unknown or OpenAI-style model names |
+| `DEFAULT_MODEL` | Fallback model for recognized OpenAI- or Anthropic-style model aliases |
 | `WEB_SEARCH_MODEL` | Compatibility fallback for helper calls without a selected model |
 
 The Worker verifies the `Cf-Access-Jwt-Assertion` signature and audience against Cloudflare Access. If the team domain or audience is missing, `/admin` fails closed with setup instructions.
@@ -149,9 +151,45 @@ npm run test:openai
 unset API_KEY
 ```
 
+## Anthropic SDK quickstart
+
+The same dashboard key can be passed through the Anthropic SDK's `x-api-key` header. Set `baseURL` to the site origin—the SDK adds `/v1/messages` itself:
+
+```js
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  apiKey: process.env.CFAI_API_KEY,
+  baseURL: "https://ai.lofuyu.com",
+});
+
+const stream = client.messages.stream({
+  model: "@cf/meta/llama-3.1-8b-instruct-fp8",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Teach me C++ with a Python comparison." }],
+});
+
+stream.on("text", (text) => process.stdout.write(text));
+await stream.finalMessage();
+```
+
+Supported Messages features include the top-level `system` prompt, string or text-block content, `max_tokens`, `temperature`, `top_p`, stop controls, tool definitions, buffered `tool_use` responses, `tool_use`/`tool_result` history, Anthropic error envelopes, native named SSE events, and `/v1/messages/count_tokens`. Image, document, extended-thinking, and streamed tool-use blocks are not currently accepted. Token counting is a gateway estimate rather than Anthropic's tokenizer.
+
+This is wire-format compatibility over the gateway's Cloudflare and optional NVIDIA models; it does not provide Anthropic-hosted Claude inference. A `claude-*` model alias resolves to `DEFAULT_MODEL`, while a Workers AI or indexed NVIDIA model ID selects that model directly.
+
+Run the live official-SDK check with the site origin as `BASE_URL`:
+
+```sh
+export BASE_URL=https://ai.lofuyu.com
+read -s API_KEY
+export API_KEY
+npm run test:anthropic
+unset API_KEY
+```
+
 ## Search behavior
 
-Live web search is model-controlled. When a provider is configured, the selected chat model receives the Worker's read-only `web_search` and `web_fetch` tools and can answer directly or call them. Client-defined tool schemas are accepted for OpenAI-compatible tool calling, but the Worker executes only its two server-owned web tools.
+Live web search is model-controlled. When a provider is configured, the selected chat model receives the Worker's read-only `web_search` and `web_fetch` tools and can answer directly or call them. Client-defined tool schemas are accepted in either API format, but the Worker executes only its two server-owned web tools.
 
 Provider precedence is deliberate:
 

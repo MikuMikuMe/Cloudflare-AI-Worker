@@ -17,7 +17,7 @@ try {
     platform: 'node',
     target: 'node20',
     sourcemap: false,
-    packages: 'external',
+    packages: 'bundle',
     logLevel: 'warning',
   });
 

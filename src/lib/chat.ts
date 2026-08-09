@@ -6,7 +6,7 @@ import {
   isCloudflareNeuronsExhaustedError,
   isCloudflarePaidPlanRequiredError,
 } from './cloudflare-usage';
-import type { ChatMessage, Usage } from '../types';
+import type { ChatMessage, ChatToolCall, Usage } from '../types';
 
 interface CompletionOptions {
   id: string;
@@ -71,6 +71,44 @@ export function extractText(value: unknown): string {
   return '';
 }
 
+/** Normalize tool calls returned by Workers AI and OpenAI-compatible providers. */
+export function extractToolCalls(value: unknown): ChatToolCall[] {
+  const record = asRecord(value);
+  const result = asRecord(record?.result);
+  const choices = Array.isArray(record?.choices) ? record.choices : [];
+  const firstChoice = asRecord(choices[0]);
+  const message = asRecord(firstChoice?.message);
+  const candidates = [record?.tool_calls, result?.tool_calls, message?.tool_calls].find(Array.isArray);
+  if (!Array.isArray(candidates)) return [];
+
+  return candidates.flatMap((candidate, index) => {
+    const call = asRecord(candidate);
+    if (!call) return [];
+    const fn = asRecord(call.function);
+    const nameValue = fn?.name ?? call.name;
+    const name = typeof nameValue === 'string' ? nameValue.trim() : '';
+    if (!name) return [];
+    const args = fn?.arguments ?? call.arguments ?? {};
+    let argumentsText: string;
+    if (typeof args === 'string') {
+      argumentsText = args;
+    } else {
+      try {
+        argumentsText = JSON.stringify(args) ?? '{}';
+      } catch {
+        argumentsText = '{}';
+      }
+    }
+    return [{
+      id: typeof call.id === 'string' && call.id.trim()
+        ? call.id.trim().slice(0, 128)
+        : `call_${index + 1}_${crypto.randomUUID().replace(/-/g, '')}`,
+      type: 'function' as const,
+      function: { name: name.slice(0, 128), arguments: argumentsText },
+    }];
+  });
+}
+
 export function extractUsage(value: unknown, promptTokens: number, text: string): Usage {
   const record = asRecord(value);
   const usage = asRecord(record?.usage) ?? asRecord(asRecord(record?.result)?.usage);
@@ -79,7 +117,13 @@ export function extractUsage(value: unknown, promptTokens: number, text: string)
   return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
 }
 
-export function buildCompletion(id: string, model: string, text: string, usage: Usage): Record<string, unknown> {
+export function buildCompletion(
+  id: string,
+  model: string,
+  text: string,
+  usage: Usage,
+  toolCalls: ChatToolCall[] = [],
+): Record<string, unknown> {
   return {
     id,
     object: 'chat.completion',
@@ -88,9 +132,13 @@ export function buildCompletion(id: string, model: string, text: string, usage: 
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content: text },
+        message: {
+          role: 'assistant',
+          content: text || (toolCalls.length ? null : ''),
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+        },
         logprobs: null,
-        finish_reason: 'stop',
+        finish_reason: toolCalls.length ? 'tool_calls' : 'stop',
       },
     ],
     usage,

@@ -16,6 +16,7 @@ import {
   buildCompletion,
   estimatePromptTokens,
   extractText,
+  extractToolCalls,
   extractUsage,
   newCompletionId,
   toOpenAIStream,
@@ -85,11 +86,13 @@ function withProviderFallbackHeaders(response: Response, from: string, to: strin
 }
 
 /** API keys are for external callers; an Access session is also accepted for convenience. */
-async function authorise(request: Request, env: Env): Promise<AuthResult> {
+export async function authoriseApiRequest(request: Request, env: Env): Promise<AuthResult> {
   const bearer = extractBearer(request);
+  const anthropicKey = request.headers.get('x-api-key')?.trim() || null;
+  const credential = bearer ?? anthropicKey;
 
-  if (bearer) {
-    const key = await authenticateKey(env, bearer);
+  if (credential) {
+    const key = await authenticateKey(env, credential);
     if (!key) {
       return {
         ok: false,
@@ -110,7 +113,7 @@ async function authorise(request: Request, env: Env): Promise<AuthResult> {
   return {
     ok: false,
     response: apiError(
-      'You did not provide an API key. Include Authorization: Bearer sk-cfai-... or use the signed-in dashboard.',
+      'You did not provide an API key. Include Authorization: Bearer sk-cfai-..., x-api-key: sk-cfai-..., or use the signed-in dashboard.',
       401,
       'authentication_error',
       'missing_api_key',
@@ -382,8 +385,13 @@ export async function handleChatCompletions(
   env: Env,
   ctx: ExecutionContext,
   trustedAccess = false,
+  authenticatedKeyId?: string | null,
 ): Promise<Response> {
-  const auth = trustedAccess ? ({ ok: true, keyId: null } as const) : await authorise(request, env);
+  const auth = authenticatedKeyId !== undefined
+    ? ({ ok: true, keyId: authenticatedKeyId } as const)
+    : trustedAccess
+      ? ({ ok: true, keyId: null } as const)
+      : await authoriseApiRequest(request, env);
   if (!auth.ok) return auth.response;
 
   let body: ChatCompletionRequest;
@@ -658,7 +666,7 @@ export async function handleChatCompletions(
           });
         }
 
-        return json(buildCompletion(id, responseModel, text, usage), 200, API_CORS);
+        return json(buildCompletion(id, responseModel, text, usage, extractToolCalls(raw)), 200, API_CORS);
       }
 
       const finalInputs: Record<string, unknown> = { ...inputs, messages: webAgent.messages };
@@ -719,7 +727,7 @@ export async function handleChatCompletions(
 
       return json(
         {
-          ...buildCompletion(id, responseModel, text, usage),
+          ...buildCompletion(id, responseModel, text, usage, extractToolCalls(raw)),
           web_search: webSearch,
         },
         200,
@@ -764,7 +772,7 @@ export async function handleChatCompletions(
     const text = extractText(result);
     const usage = extractUsage(result, promptTokens, text);
     accountUsage(usage);
-    return json(buildCompletion(id, responseModel, text, usage), 200, API_CORS);
+    return json(buildCompletion(id, responseModel, text, usage, extractToolCalls(result)), 200, API_CORS);
   } catch (error) {
     if (isCloudflareModel(model) && isCloudflareNeuronsExhaustedError(error)) {
       const observedAt = new Date();
@@ -839,7 +847,7 @@ function extractVectors(value: unknown): number[][] {
 }
 
 export async function handleEmbeddings(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const auth = await authorise(request, env);
+  const auth = await authoriseApiRequest(request, env);
   if (!auth.ok) return auth.response;
 
   let body: EmbeddingsRequest;

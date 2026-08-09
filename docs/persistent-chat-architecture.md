@@ -14,7 +14,7 @@ The authenticated dashboard uses Cloudflare D1 as the canonical store for accoun
 - Conversation lists use keyset pagination. Renames and sends use optimistic versions, and duplicate turn retries are payload-bound.
 - Deletes physically cascade to messages. Raw JWTs, API keys, fetched page bodies, tool payloads, and upstream error details are not stored.
 
-The public `/v1/chat/completions` API remains stateless and OpenAI-compatible. Persistence exists only on the Access-authenticated `/admin/api/conversations/*` surface.
+The public OpenAI-compatible `/v1/chat/completions` and Anthropic-compatible `/v1/messages` APIs remain stateless. Persistence exists only on the Access-authenticated `/admin/api/conversations/*` surface.
 
 ## Why D1 first
 

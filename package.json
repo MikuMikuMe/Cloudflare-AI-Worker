@@ -2,7 +2,7 @@
   "name": "cloudflare-ai-worker",
   "version": "2.4.0",
   "private": true,
-  "description": "OpenAI-compatible AI gateway on Cloudflare Workers, with Cloudflare Access SSO and self-service API keys",
+  "description": "OpenAI- and Anthropic-compatible AI gateway on Cloudflare Workers, with Cloudflare Access SSO and self-service API keys",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
@@ -12,9 +12,11 @@
     "db:migrate": "wrangler d1 migrations apply cfai-db --remote",
     "db:migrate:local": "wrangler d1 migrations apply cfai-db --local",
     "test": "node scripts/run-tests.mjs",
-    "test:openai": "node scripts/verify-openai-sdk.mjs"
+    "test:openai": "node scripts/verify-openai-sdk.mjs",
+    "test:anthropic": "node scripts/verify-anthropic-sdk.mjs"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "@cloudflare/workers-types": "^5.20260801.1",
     "esbuild": "^0.28.1",
     "miniflare": "5.20260801.1-alpha",
