@@ -736,6 +736,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   let plannerTools: unknown;
+  let plannerTurns = 0;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     calls.push(url);
@@ -743,8 +744,15 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
       const requestBody = JSON.parse(String(init?.body));
       if (requestBody.tools) {
         plannerTools = requestBody.tools;
+        plannerTurns += 1;
+        if (plannerTurns > 1) {
+          return Response.json({
+            choices: [{ message: { role: 'assistant', content: 'Search complete' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          });
+        }
         return Response.json({
-          choices: [{ message: { content: '', tool_calls: [{ id: 'search-1', type: 'function', function: { name: 'web_search', arguments: JSON.stringify({ query: 'current fact' }) } }] } }],
+          choices: [{ message: { content: '<search><query>Opus 5 released date</query></search>' } }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         });
       }
@@ -774,7 +782,10 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
       new Request('https://ai.example.test/v1/chat/completions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: 'google/gemma-4-31b-it', messages: [{ role: 'user', content: 'current fact' }] }),
+        body: JSON.stringify({
+          model: 'google/gemma-4-31b-it',
+          messages: [{ role: 'user', content: 'search when was opus 5 released' }],
+        }),
       }),
       env,
       context(),
@@ -787,6 +798,7 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
     assert.equal(body.web_search.performed, true);
     assert.equal((plannerTools as any[])[0].type, 'function');
     assert.equal((plannerTools as any[])[0].function.name, 'web_search');
+    assert.ok(calls.some((url) => url.includes('search.example.test/search')));
     assert.ok(calls.filter((url) => url.includes('/chat/completions')).length >= 2);
   } finally {
     globalThis.fetch = originalFetch;

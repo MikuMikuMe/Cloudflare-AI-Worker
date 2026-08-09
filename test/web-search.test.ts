@@ -176,6 +176,9 @@ test('automatic web-search intent keeps casual and coding prompts on the direct 
     content: 'write a cpp code and also give me a python equivalent, teach me cpp',
   }]), false);
   assert.equal(shouldUseAutomaticWebSearch([{ role: 'user', content: 'What is the latest NVIDIA news today?' }]), true);
+  assert.equal(shouldUseAutomaticWebSearch([{ role: 'user', content: 'when was opus 5 released?' }]), true);
+  assert.equal(shouldUseAutomaticWebSearch([{ role: 'user', content: 'search when was opus 5 released' }]), true);
+  assert.equal(shouldUseAutomaticWebSearch([{ role: 'user', content: 'teach me binary search algorithms' }]), false);
 });
 
 for (const model of ['@cf/qwen/qwen3-30b-a3b-fp8', '@cf/nvidia/nemotron-3-120b-a12b']) {

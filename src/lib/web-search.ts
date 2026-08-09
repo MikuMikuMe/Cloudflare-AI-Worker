@@ -9,7 +9,7 @@ const DEFAULT_MAX_FETCH_CHARS = 20_000;
 const MAX_FETCH_CHARS = 40_000;
 const MAX_TOOL_ROUNDS = 2;
 
-const LIVE_WEB_INTENT = /\b(?:search(?:\s+the)?\s+web|browse(?:\s+the)?\s+web|look\s+up|find\s+online|online\s+sources?|web\s+sources?|latest|today|tonight|yesterday|tomorrow|current(?:ly)?|recent(?:ly)?|right\s+now|live\s+(?:score|results?|updates?)|news|headlines?|breaking|as\s+of|this\s+(?:week|month|year)|weather|forecast|stock\s+price|exchange\s+rate|standings|schedule|availability|release\s+date|opening\s+hours)\b/i;
+const LIVE_WEB_INTENT = /\b(?:search(?:\s+(?:the\s+)?web|\s+(?:for\s+)?(?:when|what|who|where|why|how|whether|if))|browse(?:\s+the)?\s+web|look\s+up|find\s+online|online\s+sources?|web\s+sources?|latest|today|tonight|yesterday|tomorrow|current(?:ly)?|recent(?:ly)?|right\s+now|live\s+(?:score|results?|updates?)|news|headlines?|breaking|as\s+of|this\s+(?:week|month|year)|weather|forecast|stock\s+price|exchange\s+rate|standings|schedule|availability|release\s+date|opening\s+hours)\b|\bwhen\s+(?:was|is|did|will)\s+.{1,120}?\b(?:released?|launched?)\b/i;
 
 export interface WebSearchSource {
   id: string;
@@ -533,7 +533,21 @@ function extractToolCalls(value: unknown): NormalizedToolCall[] {
   const firstChoice = asRecord(choices[0]);
   const message = asRecord(firstChoice?.message);
   const candidates = [record?.tool_calls, result?.tool_calls, message?.tool_calls].find(Array.isArray);
-  if (!Array.isArray(candidates)) return [];
+  if (!Array.isArray(candidates)) {
+    // Some NVIDIA reasoning models emit their native search request as text
+    // even when given OpenAI-compatible tools. Accept only the exact,
+    // whole-response form so ordinary XML examples can never execute a tool.
+    const text = extractText(value).trim();
+    const search = /^<search>\s*<query>\s*([\s\S]{1,2000}?)\s*<\/query>\s*<\/search>$/i.exec(text);
+    const query = search ? decodeHtmlEntities(search[1]).trim() : '';
+    return query
+      ? [{
+          id: 'web-call-1',
+          type: 'function',
+          function: { name: 'web_search', arguments: JSON.stringify({ query }) },
+        }]
+      : [];
+  }
 
   return candidates.flatMap((candidate, index): NormalizedToolCall[] => {
     const call = asRecord(candidate);
