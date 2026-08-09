@@ -97,7 +97,7 @@ test('model adapter preserves a quota error that surfaces while reading the stre
   ).text();
 
   assert.match(output, /"code":"cloudflare_neurons_exhausted"/);
-  assert.match(output, /00:00 UTC reset/);
+  assert.match(output, /retry Cloudflare shortly/);
   assert.doesNotMatch(output, /data: \[DONE\]/);
   assert.deepEqual(codes, ['cloudflare_neurons_exhausted']);
 });
@@ -113,6 +113,21 @@ test('model adapter preserves a structured quota error event', async () => {
   ).text();
 
   assert.match(output, /"code":"cloudflare_neurons_exhausted"/);
+  assert.doesNotMatch(output, /data: \[DONE\]/);
+});
+
+test('model adapter preserves a structured paid-plan error event', async () => {
+  const output = await new Response(
+    toOpenAIStream(
+      streamOf([
+        'data: {"error":{"code":5035,"message":"Upgrade to Workers Paid"}}\n\n',
+      ]),
+      completionOptions(() => undefined, () => undefined, true),
+    ),
+  ).text();
+
+  assert.match(output, /"code":"cloudflare_paid_plan_required"/);
+  assert.match(output, /Workers Paid plan/);
   assert.doesNotMatch(output, /data: \[DONE\]/);
 });
 
@@ -199,5 +214,19 @@ test('AI Search adapter preserves a stream-time neuron quota failure', async () 
 
   assert.match(output, /"code":"cloudflare_neurons_exhausted"/);
   assert.deepEqual(codes, ['cloudflare_neurons_exhausted']);
+  assert.doesNotMatch(output, /data: \[DONE\]/);
+});
+
+test('AI Search adapter preserves a streamed paid-plan failure', async () => {
+  const output = await new Response(
+    toOpenAISearchStream(
+      streamOf([
+        'data: {"error":{"code":5035,"message":"Upgrade to Workers Paid"}}\n\n',
+      ]),
+      completionOptions(() => undefined),
+    ),
+  ).text();
+
+  assert.match(output, /"code":"cloudflare_paid_plan_required"/);
   assert.doesNotMatch(output, /data: \[DONE\]/);
 });

@@ -57,6 +57,8 @@ export interface FinalizeConversationTurnInput {
   content: string;
   status: Exclude<ConversationMessageStatus, 'generating'>;
   model: string;
+  /** Keep the user's selected model as the conversation preference after provider fallback. */
+  lastModel?: string;
   metadata?: unknown;
 }
 
@@ -624,6 +626,7 @@ export async function finalizeConversationTurn(
   }
   const content = assistantContent(input.content, input.status);
   const model = requiredString(input.model, 'model', MAX_MODEL_LENGTH);
+  const lastModel = requiredString(input.lastModel ?? input.model, 'lastModel', MAX_MODEL_LENGTH);
   const ownerRow = await findConversationRow(db, owner, conversationId);
   if (!ownerRow) return null;
   const existing = (await getTurnMessages(db, conversationId, turnId)).find((message) => message.role === 'assistant');
@@ -668,7 +671,7 @@ export async function finalizeConversationTurn(
             )`,
       )
       .bind(
-        model,
+        lastModel,
         now,
         conversationId,
         owner.scope,

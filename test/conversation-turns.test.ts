@@ -190,6 +190,149 @@ test('a model failure finalizes an empty assistant instead of leaving a generati
   assert.doesNotMatch(JSON.stringify(detail), /provider detail/);
 });
 
+test('a provider fallback is disclosed and persisted with the model that answered', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const requestedModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const fallbackModel = 'meta/llama-3.3-70b-instruct';
+  const conversation = await createConversation(store.db, owner, { model: requestedModel });
+  const env = { DB: store.db, DEFAULT_MODEL: requestedModel } as any;
+
+  const response = await handlePersistentConversationTurn(
+    new Request(`https://app.test/admin/api/conversations/${conversation.id}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: 'hello',
+        model: requestedModel,
+        client_turn_id: 'turn_fallback_0001',
+        expected_version: conversation.version,
+      }),
+    }),
+    env,
+    `/admin/api/conversations/${conversation.id}/turns`,
+    context(),
+    identity,
+    {
+      runChat: (async () => new Response(
+        [
+          `data: {"model":"${fallbackModel}","choices":[{"delta":{"content":"Fallback answer"}}]}\n\n`,
+          'data: [DONE]\n\n',
+        ].join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )) as any,
+    },
+  );
+
+  assert.ok(response);
+  assert.match(await response.text(), /Fallback answer/);
+  const detail = await getConversation(store.db, owner, conversation.id);
+  const assistant = detail?.messages.at(-1);
+  assert.equal(assistant?.model, fallbackModel);
+  assert.equal(detail?.conversation.last_model, requestedModel);
+  assert.deepEqual(assistant?.metadata, {
+    provider_fallback: {
+      from: requestedModel,
+      to: fallbackModel,
+      reason: 'cloudflare_neurons_exhausted',
+    },
+  });
+});
+
+test('a failed NVIDIA backup records the attempted provider without changing the chat preference', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const requestedModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const fallbackModel = 'meta/llama-3.3-70b-instruct';
+  const conversation = await createConversation(store.db, owner, { model: requestedModel });
+  const env = { DB: store.db, DEFAULT_MODEL: requestedModel } as any;
+
+  const response = await handlePersistentConversationTurn(
+    new Request(`https://app.test/admin/api/conversations/${conversation.id}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: 'hello',
+        model: requestedModel,
+        client_turn_id: 'turn_fallback_0002',
+        expected_version: conversation.version,
+        allow_provider_fallback: true,
+      }),
+    }),
+    env,
+    `/admin/api/conversations/${conversation.id}/turns`,
+    context(),
+    identity,
+    {
+      runChat: (async () => new Response(JSON.stringify({
+        error: { message: 'sanitized NVIDIA failure', code: 'upstream_error' },
+      }), {
+        status: 502,
+        headers: {
+          'content-type': 'application/json',
+          'x-ai-provider-fallback-from': requestedModel,
+          'x-ai-provider-fallback-to': fallbackModel,
+          'x-ai-provider-fallback-reason': 'cloudflare_neurons_exhausted',
+        },
+      })) as any,
+    },
+  );
+
+  assert.equal(response?.status, 502);
+  const detail = await getConversation(store.db, owner, conversation.id);
+  const assistant = detail?.messages.at(-1);
+  assert.equal(assistant?.model, fallbackModel);
+  assert.equal(detail?.conversation.last_model, requestedModel);
+  assert.deepEqual(assistant?.metadata, {
+    provider_fallback: {
+      from: requestedModel,
+      to: fallbackModel,
+      reason: 'cloudflare_neurons_exhausted',
+    },
+    failure: { code: 'upstream_error' },
+  });
+  assert.doesNotMatch(JSON.stringify(detail), /sanitized NVIDIA failure/);
+});
+
+test('a paid-plan rejection persists its actionable code', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const model = '@cf/moonshotai/kimi-k2.6';
+  const conversation = await createConversation(store.db, owner, { model });
+  const env = { DB: store.db, DEFAULT_MODEL: model } as any;
+
+  const response = await handlePersistentConversationTurn(
+    new Request(`https://app.test/admin/api/conversations/${conversation.id}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: 'hello',
+        model,
+        client_turn_id: 'turn_paid_000001',
+        expected_version: conversation.version,
+      }),
+    }),
+    env,
+    `/admin/api/conversations/${conversation.id}/turns`,
+    context(),
+    identity,
+    {
+      runChat: (async () => new Response(JSON.stringify({
+        error: { message: 'upgrade detail', code: 'cloudflare_paid_plan_required' },
+      }), {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      })) as any,
+    },
+  );
+
+  assert.equal(response?.status, 403);
+  const detail = await getConversation(store.db, owner, conversation.id);
+  assert.deepEqual(detail?.messages.at(-1)?.metadata, {
+    failure: { code: 'cloudflare_paid_plan_required' },
+  });
+});
+
 test('a neuron quota failure persists its actionable code without raw provider details', async (t) => {
   const store = await database();
   t.after(store.dispose);

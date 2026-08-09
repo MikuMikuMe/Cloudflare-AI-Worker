@@ -133,6 +133,8 @@ const STYLES = `
   .composer{display:flex;gap:9px}
   .search-status{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap}
   .search-status::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px #3fb95018}
+  .fallback-consent{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap;cursor:pointer}
+  .fallback-consent input{accent-color:var(--accent2)}.fallback-consent.off{opacity:.55;cursor:default}
   .composer textarea{flex:1;resize:none;max-height:110px}
   .bars{display:flex;align-items:flex-end;gap:3px;height:110px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:11px}
   .bar{flex:1;background:linear-gradient(180deg,var(--accent),#a2521200);border-radius:3px 3px 0 0;min-height:2px}
@@ -603,6 +605,9 @@ export function dashboardPage(email: string, teamDomain: string): string {
           <div class="chat-controls">
             <select id="model" aria-label="Chat model"></select>
             <span class="search-status" title="The selected model can call server-managed web tools when needed">Web tools automatic</span>
+            <label class="fallback-consent" id="fallback-consent" title="If Cloudflare rejects the request, this allows the current chat context to be sent to its mapped NVIDIA backup model.">
+              <input id="provider-fallback" type="checkbox"> NVIDIA backup
+            </label>
             <button class="btn ghost small" id="rename-chat" type="button" disabled>Rename</button>
             <button class="btn danger" id="delete-chat" type="button" disabled>Delete</button>
           </div>
@@ -1218,6 +1223,7 @@ function setChatBusy(busy){
   var historyMore = $('#history-more');
   if (historyMore) historyMore.disabled = busy || olderMessagesLoading;
   $('#chat').setAttribute('aria-busy', busy ? 'true' : 'false');
+  updateProviderFallbackControl();
 }
 
 function refreshChatBusy(){
@@ -1251,10 +1257,31 @@ function messageMetadata(value){
 function messageFailureText(message){
   var metadata = messageMetadata(message && message.metadata);
   var failure = metadata.failure && typeof metadata.failure === 'object' ? metadata.failure : {};
+  var fallback = metadata.provider_fallback && typeof metadata.provider_fallback === 'object'
+    ? metadata.provider_fallback
+    : null;
+  if (fallback && typeof fallback.to === 'string' && fallback.to) {
+    return 'Cloudflare rejected this request, and the NVIDIA backup (' + fallback.to + ') also failed.';
+  }
   if (failure.code === 'cloudflare_neurons_exhausted') {
-    return "Cloudflare Workers AI has reached this account's daily 10,000-Neuron allocation. Cloudflare models resume after the 00:00 UTC reset; chat requests can use an NVIDIA model now.";
+    return "Cloudflare is rejecting Workers AI requests with its allocation error even though today's usage may show 0. The gateway will retry Cloudflare shortly; choose an NVIDIA model or enable NVIDIA backup to continue.";
+  }
+  if (failure.code === 'cloudflare_paid_plan_required') {
+    return 'This Workers AI model requires the Workers Paid plan or prepaid AI Gateway credits.';
   }
   return 'This response could not be completed.';
+}
+
+function messageProviderFallbackText(message){
+  var metadata = messageMetadata(message && message.metadata);
+  var fallback = metadata.provider_fallback && typeof metadata.provider_fallback === 'object'
+    ? metadata.provider_fallback
+    : null;
+  if (!fallback || typeof fallback.to !== 'string' || !fallback.to) return '';
+  var reason = fallback.reason === 'cloudflare_paid_plan_required'
+    ? 'the selected Cloudflare model requires paid billing'
+    : 'Cloudflare rejected the request as allocation-limited';
+  return 'Continued with NVIDIA (' + fallback.to + ') because ' + reason + '.';
 }
 
 function messageSearchPresentation(message){
@@ -1311,6 +1338,9 @@ function renderConversationMessages(messages, nextBeforeSeq, preservePosition){
         messageStatus(bubble, 'This response was interrupted. Send a new message to continue.', 'error', false);
       } else if (message.status === 'failed' || message.status === 'error') {
         messageStatus(bubble, messageFailureText(message), 'error', false);
+      } else {
+        var fallbackText = messageProviderFallbackText(message);
+        if (fallbackText) messageStatus(bubble, fallbackText, '', false);
       }
     }
   });
@@ -1374,19 +1404,36 @@ function closeConversationSidebar(){
   $('#conversation-toggle').setAttribute('aria-expanded', 'false');
 }
 
+function updateProviderFallbackControl(){
+  var checkbox = $('#provider-fallback');
+  var selected = $('#model').selectedOptions && $('#model').selectedOptions[0];
+  var hasMappedFallback = Boolean(
+    selected
+    && selected.value.indexOf('@cf/') === 0
+    && selected.dataset.fallbackModel
+  );
+  var disabled = Boolean(activeRequest || conversationMutation || conversationLoading) || !hasMappedFallback;
+  if (!hasMappedFallback) checkbox.checked = false;
+  checkbox.disabled = disabled;
+  $('#fallback-consent').classList.toggle('off', disabled);
+}
+
 function applyConversationModel(model){
   if (!model) return;
   pendingModel = model;
   if (!modelsLoaded) return;
   var option = Array.from($('#model').options).find(function(item){ return item.value === model; });
-  if (option && !option.disabled) {
+  if (option) {
     $('#model').value = model;
     pendingModel = '';
-  } else if (option) {
-    var firstEnabled = $('#model').querySelector('option:not([disabled])');
-    $('#model').value = firstEnabled ? firstEnabled.value : '';
+  } else {
+    var defaultCloudflare = Array.from($('#model').options).find(function(item){
+      return item.value.indexOf('@cf/') === 0;
+    });
+    $('#model').value = defaultCloudflare ? defaultCloudflare.value : '';
     pendingModel = '';
   }
+  updateProviderFallbackControl();
 }
 
 async function openConversation(id, navigationMode){
@@ -1557,8 +1604,9 @@ async function syncFromAnotherDevice(){
   if (remote.version === before.version && remote.updated_at === before.updated_at) return;
   await openConversation(before.id, null);
   if (preserveModel) {
-    var option = Array.from($('#model').options).find(function(item){ return item.value === selectedModel && !item.disabled; });
+    var option = Array.from($('#model').options).find(function(item){ return item.value === selectedModel; });
     if (option) $('#model').value = selectedModel;
+    updateProviderFallbackControl();
   }
   if (preserveScroll) {
     $('#chat').scrollTop = previousScroll;
@@ -1570,15 +1618,17 @@ async function syncFromAnotherDevice(){
 function loadModels(){
   fetch('/v1/models').then(function(r){ return r.json(); }).then(function(d){
     var sel = $('#model');
-    var previous = pendingModel || (activeConversation && activeConversation.last_model) || sel.value;
+    var previous = pendingModel || sel.value || (activeConversation && activeConversation.last_model);
     sel.innerHTML = '';
     (d.data || []).filter(function(m){ return m.id.indexOf('bge') === -1 && m.id.indexOf('embedding') === -1; })
       .forEach(function(m){
         var o = document.createElement('option');
         o.value = m.id;
         o.disabled = m.disabled === true;
+        if (typeof m.fallback_model === 'string') o.dataset.fallbackModel = m.fallback_model;
         o.textContent = (m.provider === 'nvidia' ? 'NVIDIA · ' : '') + m.id.replace('@cf/', '')
-          + (o.disabled ? ' · Cloudflare neurons exhausted' : '');
+          + (m.requires_paid_plan === true ? ' · Paid billing required' : '')
+          + (o.disabled ? ' · Cloudflare temporarily rejecting inference' : '');
         sel.appendChild(o);
       });
     modelsLoaded = true;
@@ -1588,30 +1638,42 @@ function loadModels(){
     if (cloudflareQuotaDisabled) scheduleCloudflareQuotaReset();
     else clearCloudflareQuotaReset();
     var saved = Array.from(sel.options).find(function(option){ return option.value === previous; });
-    var firstEnabled = sel.querySelector('option:not([disabled])');
-    if (saved && !saved.disabled) sel.value = saved.value;
-    else if (firstEnabled) sel.value = firstEnabled.value;
-    else sel.value = '';
+    var defaultCloudflare = Array.from(sel.options).find(function(option){
+      return option.value.indexOf('@cf/') === 0;
+    }) || null;
+    if (saved) {
+      sel.value = saved.value;
+    } else if (defaultCloudflare) {
+      sel.value = defaultCloudflare.value;
+    } else {
+      sel.value = '';
+    }
     pendingModel = '';
-  }).catch(function(){ $('#model').innerHTML = '<option value="">Models unavailable</option>'; });
+    updateProviderFallbackControl();
+  }).catch(function(){
+    $('#model').innerHTML = '<option value="">Models unavailable</option>';
+    updateProviderFallbackControl();
+  });
 }
 
 function disableCloudflareModelsForQuota(){
   var sel = $('#model');
+  var selectedModel = sel.value;
   Array.from(sel.options).forEach(function(option){
     if (option.value.indexOf('@cf/') !== 0) return;
     option.disabled = true;
-    if (option.textContent.indexOf(' · Cloudflare neurons exhausted') === -1) {
-      option.textContent += ' · Cloudflare neurons exhausted';
+    if (option.textContent.indexOf(' · Cloudflare temporarily rejecting inference') === -1) {
+      option.textContent += ' · Cloudflare temporarily rejecting inference';
     }
   });
-  var selected = sel.selectedOptions && sel.selectedOptions[0];
-  if (selected && selected.disabled) {
-    var firstEnabled = sel.querySelector('option:not([disabled])');
-    sel.value = firstEnabled ? firstEnabled.value : '';
-  }
+  if (selectedModel) sel.value = selectedModel;
+  updateProviderFallbackControl();
   scheduleCloudflareQuotaReset();
 }
+
+$('#model').addEventListener('change', function(){
+  updateProviderFallbackControl();
+});
 
 function clearCloudflareQuotaReset(){
   if (cloudflareQuotaResetTimer) clearTimeout(cloudflareQuotaResetTimer);
@@ -1622,9 +1684,8 @@ function clearCloudflareQuotaReset(){
 function scheduleCloudflareQuotaReset(){
   if (cloudflareQuotaResetTimer) return;
   var now = new Date();
-  var resetAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   var retryingReset = cloudflareQuotaResetRetryUntil > now.getTime();
-  var delay = retryingReset ? 15000 : Math.max(1000, resetAt - now.getTime() + 1000);
+  var delay = retryingReset ? 15000 : 60000;
   cloudflareQuotaResetTimer = setTimeout(function(){
     cloudflareQuotaResetTimer = null;
     if (!retryingReset) cloudflareQuotaResetRetryUntil = Date.now() + 5 * 60 * 1000;
@@ -1750,8 +1811,14 @@ async function send(){
   var text = $('#prompt').value.trim();
   if (!text) return;
   if (!$('#model').value) { toast('Choose an available model first'); return; }
+  var requestedModel = $('#model').value;
   var selectedOption = $('#model').selectedOptions && $('#model').selectedOptions[0];
-  if (selectedOption && selectedOption.disabled) { toast('Choose an available model first'); return; }
+  var allowProviderFallback = requestedModel.indexOf('@cf/') === 0 && $('#provider-fallback').checked;
+  var canUseMappedFallback = Boolean(selectedOption && selectedOption.dataset.fallbackModel);
+  if (selectedOption && selectedOption.disabled && !(allowProviderFallback && canUseMappedFallback)) {
+    toast('Enable NVIDIA backup or choose an NVIDIA model.');
+    return;
+  }
   if (!activeConversation && !(await createConversation())) return;
   var conversation = activeConversation;
   if (!conversation) return;
@@ -1763,6 +1830,7 @@ async function send(){
   var acc = '';
   var sources = [];
   var webSearch = null;
+  var providerFallback = null;
   var pending = true;
   var assistantStored = false;
   var renderFrame = 0;
@@ -1787,6 +1855,14 @@ async function send(){
   }
 
   function handleStreamEvent(event){
+    var eventModel = event && typeof event.model === 'string' ? event.model : '';
+    if (!providerFallback && requestedModel.indexOf('@cf/') === 0 && eventModel && eventModel.indexOf('@cf/') !== 0) {
+      providerFallback = {
+        from: requestedModel,
+        to: eventModel,
+        reason: 'cloudflare_neurons_exhausted'
+      };
+    }
     if (event.conversation) {
       var streamedConversation = adaptConversation(event.conversation);
       if (streamedConversation && activeConversation && activeConversation.id === streamedConversation.id) {
@@ -1810,9 +1886,10 @@ async function send(){
   try {
     var turnBody = {
       content: text,
-      model: $('#model').value,
+      model: requestedModel,
       client_turn_id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random().toString(16).slice(2),
-      expected_version: conversation.version
+      expected_version: conversation.version,
+      allow_provider_fallback: allowProviderFallback
     };
     var res = await fetch('/admin/api/conversations/' + encodeURIComponent(conversation.id) + '/turns', {
       method: 'POST',
@@ -1820,6 +1897,18 @@ async function send(){
       body: JSON.stringify(turnBody),
       signal: controller.signal
     });
+    var fallbackFromHeader = res.headers.get('x-ai-provider-fallback-from') || '';
+    var fallbackToHeader = res.headers.get('x-ai-provider-fallback-to') || '';
+    var fallbackReasonHeader = res.headers.get('x-ai-provider-fallback-reason') || '';
+    if (fallbackFromHeader === requestedModel && fallbackToHeader && fallbackToHeader.indexOf('@cf/') !== 0) {
+      providerFallback = {
+        from: fallbackFromHeader,
+        to: fallbackToHeader,
+        reason: fallbackReasonHeader === 'cloudflare_paid_plan_required'
+          ? 'cloudflare_paid_plan_required'
+          : 'cloudflare_neurons_exhausted'
+      };
+    }
     if (!res.ok) {
       var errorBody = null;
       try { errorBody = await res.json(); } catch(e) {}
@@ -1847,6 +1936,9 @@ async function send(){
       assistantStored = true;
     }
     else messageStatus(out, 'No answer was returned.', 'error', false);
+    if (providerFallback && acc) {
+      messageStatus(out, messageProviderFallbackText({ metadata: { provider_fallback: providerFallback } }), '', false);
+    }
   } catch(err) {
     if (controller.signal.aborted || (err && err.name === 'AbortError')) {
       return;
@@ -1858,10 +1950,13 @@ async function send(){
       assistantStored = true;
     }
     var quotaFailure = err && err.code === 'cloudflare_neurons_exhausted';
+    var paidPlanFailure = err && err.code === 'cloudflare_paid_plan_required';
     if (quotaFailure) disableCloudflareModelsForQuota();
     messageStatus(
       out,
-      quotaFailure ? err.message : 'Response interrupted: ' + (err && err.message ? err.message : 'Unknown error'),
+      quotaFailure || paidPlanFailure
+        ? err.message
+        : 'Response interrupted: ' + (err && err.message ? err.message : 'Unknown error'),
       'error',
       false
     );
@@ -1904,16 +1999,16 @@ function renderCloudflareUsage(d){
   var used = d.used_neurons == null ? null : Number(d.used_neurons || 0);
   var limit = Number(d.daily_limit_neurons || 10000);
   var quotaExhausted = d.quota_exhausted === true;
-  var percent = quotaExhausted ? 100 : (limit > 0 ? Math.min(100, Math.max(0, (Number(used) / limit) * 100)) : 0);
+  var percent = limit > 0 && used != null ? Math.min(100, Math.max(0, (used / limit) * 100)) : 0;
   $('#cloudflare-usage').className = 'cf-usage';
   $('#cloudflare-usage').innerHTML =
     '<div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div>'
     + '<div class="cf-usage-sub">Neurons used today · UTC reset at 00:00</div></div>'
-    + '<div class="cf-usage-value">' + (quotaExhausted ? 'Exhausted' : neurons(used))
+    + '<div class="cf-usage-value">' + (quotaExhausted && used == null ? 'Temporarily limited' : neurons(used))
     + ' <small>/ ' + neurons(limit) + ' neurons</small></div></div>'
     + '<div class="cf-meter"><span style="width:' + percent.toFixed(2) + '%"></span></div>'
     + '<div class="cf-usage-note">' + (quotaExhausted
-      ? 'Quota exhaustion was confirmed by Cloudflare. Rejected-request data can arrive before usage totals; the allocation resets at 00:00 UTC.'
+      ? 'Cloudflare is rejecting inference with its quota error even though usage totals may already show a reset. Retrying Cloudflare every five minutes; choose NVIDIA or enable NVIDIA backup in Chats to continue.'
       : 'Live account-level data from Cloudflare. This is separate from the gateway counters below.') + '</div>';
   if (quotaExhausted) scheduleCloudflareQuotaReset();
   else clearCloudflareQuotaReset();

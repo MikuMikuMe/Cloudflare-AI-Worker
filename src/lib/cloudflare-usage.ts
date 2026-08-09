@@ -2,12 +2,16 @@ import type { Env } from '../types';
 
 const CLOUDFLARE_GRAPHQL_ENDPOINT = 'https://api.cloudflare.com/client/v4/graphql';
 const DAILY_NEURON_LIMIT = 10_000;
-const QUOTA_ERROR_CODES = new Set(['3036', '4006']);
+const QUOTA_ERROR_CODES = new Set(['3036']);
 const PROVIDER_STATUS_KEY = 'cloudflare-workers-ai';
+const QUOTA_RETRY_INTERVAL_MS = 5 * 60_000;
 
 export const CLOUDFLARE_NEURONS_EXHAUSTED_CODE = 'cloudflare_neurons_exhausted';
 export const CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE =
-  "Cloudflare Workers AI has reached this account's daily 10,000-Neuron allocation. Cloudflare models resume after the 00:00 UTC reset; chat requests can use an NVIDIA model now. A Workers plan upgrade prevents future free-allocation failures.";
+  "Cloudflare is currently rejecting Workers AI requests with its daily 10,000-Neuron allocation error. Its usage dashboard can reset before inference access recovers, so the gateway will retry Cloudflare shortly; signed-in users can choose NVIDIA or explicitly enable NVIDIA backup.";
+export const CLOUDFLARE_PAID_PLAN_REQUIRED_CODE = 'cloudflare_paid_plan_required';
+export const CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE =
+  'This Workers AI model now requires the Workers Paid plan or prepaid AI Gateway credits.';
 
 const WORKERS_AI_USAGE_QUERY = `
   query WorkersAiDailyUsage($accountTag: string, $start: Time, $end: Time) {
@@ -71,18 +75,17 @@ export function isCloudflareNeuronsExhaustedError(error: unknown): boolean {
   const nestedError = isRecord(record?.error) ? record.error : null;
   const cause = isRecord(record?.cause) ? record.cause : null;
   const nestedCause = isRecord(nestedError?.cause) ? nestedError.cause : null;
-  if (
-    quotaErrorCode(record?.code) ||
-    quotaErrorCode(record?.errorCode) ||
-    quotaErrorCode(nestedError?.code) ||
-    quotaErrorCode(nestedError?.errorCode) ||
-    quotaErrorCode(cause?.code) ||
-    quotaErrorCode(cause?.errorCode) ||
-    quotaErrorCode(nestedCause?.code) ||
-    quotaErrorCode(nestedCause?.errorCode)
-  ) {
-    return true;
-  }
+  const codes = [
+    record?.code,
+    record?.errorCode,
+    nestedError?.code,
+    nestedError?.errorCode,
+    cause?.code,
+    cause?.errorCode,
+    nestedCause?.code,
+    nestedCause?.errorCode,
+  ].map((value) => String(value ?? '').trim());
+  if (codes.some((code) => quotaErrorCode(code))) return true;
 
   const message = [
     error instanceof Error ? error.message : typeof error === 'string' ? error : '',
@@ -93,6 +96,7 @@ export function isCloudflareNeuronsExhaustedError(error: unknown): boolean {
   ].filter(Boolean).join(' ');
 
   if (/workers_ai_free_allocation_exceeded/i.test(message)) return true;
+  if (codes.includes('4006') && /(?:neuron|allocation|account limited)/i.test(message)) return true;
   if (/(?:^|\D)(?:3036|4006)(?:\D|$)/.test(message) && /(?:neuron|allocation|account limited)/i.test(message)) {
     return true;
   }
@@ -109,13 +113,15 @@ function quotaWindow(now: Date): { day: string; resetAt: number } {
 
 async function hasConfirmedQuotaExhaustion(db: D1Database, now: Date): Promise<boolean> {
   const { day } = quotaWindow(now);
+  const recentObservationCutoff = now.getTime() - QUOTA_RETRY_INTERVAL_MS;
   try {
     const row = await db.prepare(
       `SELECT reason_code
          FROM provider_daily_status
-        WHERE provider = ? AND day_utc = ? AND state = 'quota_exhausted' AND expires_at > ?
+        WHERE provider = ? AND day_utc = ? AND state = 'quota_exhausted'
+          AND expires_at > ? AND observed_at > ?
         LIMIT 1`,
-    ).bind(PROVIDER_STATUS_KEY, day, now.getTime()).first<{ reason_code: string }>();
+    ).bind(PROVIDER_STATUS_KEY, day, now.getTime(), recentObservationCutoff).first<{ reason_code: string }>();
     return row?.reason_code === CLOUDFLARE_NEURONS_EXHAUSTED_CODE;
   } catch {
     // Deploys remain fail-open if the additive migration has not landed yet.
@@ -123,8 +129,34 @@ async function hasConfirmedQuotaExhaustion(db: D1Database, now: Date): Promise<b
   }
 }
 
+/** Cloudflare uses internal code 5035 when a model is unavailable on Workers Free. */
+export function isCloudflarePaidPlanRequiredError(error: unknown): boolean {
+  const record = isRecord(error) ? error : null;
+  const nestedError = isRecord(record?.error) ? record.error : null;
+  const cause = isRecord(record?.cause) ? record.cause : null;
+  const codes = [
+    record?.code,
+    record?.errorCode,
+    nestedError?.code,
+    nestedError?.errorCode,
+    cause?.code,
+    cause?.errorCode,
+  ].map((value) => String(value ?? '').trim());
+  if (codes.includes('5035')) return true;
+
+  const message = [
+    error instanceof Error ? error.message : typeof error === 'string' ? error : '',
+    typeof record?.message === 'string' ? record.message : '',
+    typeof nestedError?.message === 'string' ? nestedError.message : '',
+    typeof cause?.message === 'string' ? cause.message : '',
+  ].filter(Boolean).join(' ');
+  return /(?:^|\D)5035(?:\D|$)/.test(message)
+    || /(?:workers paid plan|paid billing method|upgrade[^.]{0,80}(?:workers )?paid)/i.test(message);
+}
+
 export async function recordCloudflareNeuronsExhausted(db: D1Database, now = new Date()): Promise<void> {
   const { day, resetAt } = quotaWindow(now);
+  const retryAt = Math.min(resetAt, now.getTime() + QUOTA_RETRY_INTERVAL_MS);
   await db.prepare(
     `INSERT INTO provider_daily_status
        (provider, day_utc, state, reason_code, expires_at, observed_at)
@@ -138,7 +170,7 @@ export async function recordCloudflareNeuronsExhausted(db: D1Database, now = new
     PROVIDER_STATUS_KEY,
     day,
     CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
-    resetAt,
+    retryAt,
     now.getTime(),
   ).run();
 }
@@ -235,6 +267,9 @@ export async function fetchCloudflareNeurons(env: Env, now = new Date()): Promis
   const records = extractInferenceRecords(body).filter((record) => recordBelongsToDay(record, day));
   const observedNeurons = records
     .reduce((sum, record) => sum + neuronQuantity(record), 0);
+  // Error 4006 is emitted by the inference allocator even when the dashboard
+  // has reset to zero. A historical rejection must not create an all-day
+  // circuit; only the documented 3036 code or the measured limit is durable.
   const quotaExhausted = records.some((record) => quotaErrorCode(record.errorCode)) || observedNeurons >= DAILY_NEURON_LIMIT;
   if (quotaExhausted) await recordCloudflareNeuronsExhausted(env.DB, now).catch(() => undefined);
 

@@ -7,6 +7,7 @@ export interface PersistedAssistantResult {
   text: string;
   status: PersistedAssistantStatus;
   metadata: Record<string, unknown>;
+  model?: string;
   usage?: Usage;
   error?: string;
   errorCode?: string;
@@ -227,6 +228,7 @@ export function wrapPersistedSseResponse(
   let buffer = '';
   let text = '';
   let usage: Usage | undefined;
+  let responseModel: string | undefined;
   let errorMessage: string | undefined;
   let errorCode: string | undefined;
   let webSearch: Record<string, unknown> | undefined;
@@ -239,6 +241,7 @@ export function wrapPersistedSseResponse(
     text,
     status,
     metadata: boundedMetadata(webSearch, siteSearch),
+    ...(responseModel ? { model: responseModel } : {}),
     ...(usage ? { usage } : {}),
     ...(errorMessage ? { error: errorMessage } : {}),
     ...(errorMessage && errorCode ? { errorCode } : {}),
@@ -299,6 +302,8 @@ export function wrapPersistedSseResponse(
           try {
             const payload = JSON.parse(data) as unknown;
             const record = asRecord(payload);
+            const nextModel = boundedString(record?.model, 200);
+            if (nextModel) responseModel = nextModel;
             const piece = extractText(payload);
             if (piece) {
               if (text.length + piece.length > MAX_PERSISTED_ASSISTANT_CHARACTERS) {

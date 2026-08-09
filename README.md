@@ -177,11 +177,13 @@ The Usage tab shows two different views:
 - D1 counters for requests made with this gateway's API keys
 - Account-level Workers AI Neurons read from Cloudflare's GraphQL analytics API
 
-The Cloudflare credential stays server-side. A missing or unavailable analytics response fails open until Cloudflare provides an authoritative signal. Analytics rejection codes or a Workers AI binding quota error open a D1-backed circuit until the next UTC reset, so Cloudflare models stay disabled even when usage totals lag. The dashboard reports confirmed exhaustion instead of presenting rejected requests as zero usage.
+The Cloudflare credential stays server-side. A missing or unavailable analytics response fails open until Cloudflare provides an authoritative signal. A measured 10,000-Neuron total or documented `3036` analytics result disables Cloudflare models for the daily window. A binding-level allocation rejection such as `4006` opens only a five-minute D1 circuit, because Cloudflare's usage dashboard can reset before inference access recovers; the Worker then probes Cloudflare again instead of disabling it for the rest of the day.
 
-When Cloudflare confirms that the Worker's current 10,000-Neuron daily threshold is exhausted, Cloudflare models are marked `disabled` in `/v1/models` and requests for them return `429` with `code: "cloudflare_neurons_exhausted"`.
+While that circuit is active, Cloudflare models are marked `disabled` in `/v1/models`. Public API requests remain provider-strict and return `429` with `code: "cloudflare_neurons_exhausted"`.
 
-With `NVIDIA_NIM_API_KEY` configured, the Worker refreshes NVIDIA's callable free-endpoint catalog daily and exposes matching entries from `/v1/models` with `provider: "nvidia"` and `free_endpoint: true`. NVIDIA is a user-selected alternative, not automatic model failover. Its credentials stay server-side, and its own availability, quota, and terms still apply.
+With `NVIDIA_NIM_API_KEY` configured, the Worker refreshes NVIDIA's callable free-endpoint catalog daily and exposes matching entries from `/v1/models` with `provider: "nvidia"` and `free_endpoint: true`. Signed-in users can explicitly select an NVIDIA model or enable the unchecked **NVIDIA backup** control before sending a Cloudflare request. The backup sends the current bounded chat context to the closest indexed NVIDIA model only after that prior opt-in, visibly identifies the provider change, stores the model that actually answered, and keeps the selected Cloudflare model as the conversation preference. Public API calls never switch providers automatically. If the NVIDIA credential is absent, stale catalog rows are not exposed and Cloudflare's actionable `429` is preserved.
+
+Cloudflare currently requires paid billing for `@cf/moonshotai/kimi-k2.6`, `@cf/moonshotai/kimi-k2.7-code`, and `@cf/zai-org/glm-5.2`. They remain available for Workers Paid or prepaid AI Gateway deployments and are labeled in the model picker. A Free-plan `5035` rejection is returned and saved as `cloudflare_paid_plan_required` instead of a generic failed response.
 
 ## Testing and CI
 
