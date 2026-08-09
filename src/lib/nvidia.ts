@@ -325,7 +325,8 @@ export async function refreshNvidiaModelIndex(env: Pick<Env, 'DB' | 'NVIDIA_NIM_
 
 /** Read the last indexed set, initializing it lazily on the first API call. */
 export async function getNvidiaModelIndex(env: Pick<Env, 'DB' | 'NVIDIA_NIM_API_KEY'>): Promise<NvidiaModelRecord[]> {
+  if (!env.NVIDIA_NIM_API_KEY?.trim()) return [];
   const stored = await loadStoredNvidiaModels(env);
-  if (stored.length || !env.NVIDIA_NIM_API_KEY?.trim()) return stored;
+  if (stored.length) return stored;
   return refreshNvidiaModelIndex(env);
 }

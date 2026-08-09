@@ -81,6 +81,8 @@ export interface ChatCompletionRequest {
   messages?: ChatMessage[];
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
+  /** Dashboard-only, explicit consent to retry a rejected Cloudflare request through NVIDIA. */
+  allow_provider_fallback?: boolean;
   /** Legacy compatibility flag; model tool choice is the source of truth. */
   web_search?: boolean;
   /** Search the configured ai.lofuyu.com AI Search index instead of the public web. */

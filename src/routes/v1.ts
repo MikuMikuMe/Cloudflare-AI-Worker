@@ -5,8 +5,11 @@ import { extractSearchSources, toOpenAISearchStream } from '../lib/ai-search';
 import {
   CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
   CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE,
   cloudflareNeuronsExhausted,
   isCloudflareNeuronsExhaustedError,
+  isCloudflarePaidPlanRequiredError,
   recordCloudflareNeuronsExhausted,
 } from '../lib/cloudflare-usage';
 import {
@@ -36,10 +39,16 @@ import {
   modelListPayload,
   resolveChatModel,
   resolveEmbeddingModel,
+  resolveNvidiaFallbackModel,
 } from '../lib/models';
 import type { ChatCompletionRequest, ChatMessage, ChatToolCall, EmbeddingsRequest, Env } from '../types';
 
 const WEB_SEARCH_INSTANCE = 'lofuyu-web-search';
+const CLOUDFLARE_STREAM_PREFLIGHT_LIMIT = 64 * 1024;
+
+export const PROVIDER_FALLBACK_FROM_HEADER = 'x-ai-provider-fallback-from';
+export const PROVIDER_FALLBACK_TO_HEADER = 'x-ai-provider-fallback-to';
+export const PROVIDER_FALLBACK_REASON_HEADER = 'x-ai-provider-fallback-reason';
 
 type AuthResult = { ok: true; keyId: string | null } | { ok: false; response: Response };
 
@@ -51,6 +60,28 @@ function cloudflareNeuronsExhaustedResponse(): Response {
     CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
     'model',
   );
+}
+
+function cloudflarePaidPlanRequiredResponse(): Response {
+  return apiError(
+    CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE,
+    403,
+    'permission_error',
+    CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+    'model',
+  );
+}
+
+function withProviderFallbackHeaders(response: Response, from: string, to: string, reason: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set(PROVIDER_FALLBACK_FROM_HEADER, from);
+  headers.set(PROVIDER_FALLBACK_TO_HEADER, to);
+  headers.set(PROVIDER_FALLBACK_REASON_HEADER, reason);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 /** API keys are for external callers; an Access session is also accepted for convenience. */
@@ -219,6 +250,133 @@ function bufferedModelStream(value: unknown): ReadableStream<Uint8Array> {
   });
 }
 
+function cloudflareProviderErrorInPrefix(prefix: string): unknown | null {
+  for (const rawLine of prefix.split(/\r?\n/)) {
+    let payload = rawLine.trim();
+    if (!payload || payload.startsWith(':') || payload.startsWith('event:') || payload.startsWith('id:')) continue;
+    if (payload.startsWith('data:')) payload = payload.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const parsed: unknown = JSON.parse(payload);
+      if (isCloudflareNeuronsExhaustedError(parsed) || isCloudflarePaidPlanRequiredError(parsed)) return parsed;
+    } catch {
+      // Wait for another chunk when the first provider event is split.
+    }
+  }
+  return null;
+}
+
+function hasCompleteProviderEvent(prefix: string): boolean {
+  const lines = prefix.split(/\r?\n/);
+  if (lines.length < 2) return false;
+  return lines.slice(0, -1).some((rawLine) => {
+    let payload = rawLine.trim();
+    if (!payload || payload.startsWith(':') || payload.startsWith('event:') || payload.startsWith('id:')) return false;
+    if (payload.startsWith('data:')) payload = payload.slice(5).trim();
+    return Boolean(payload);
+  });
+}
+
+function replayPrefetchedStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  prefetched: Uint8Array[],
+  sourceDone: boolean,
+): ReadableStream<Uint8Array> {
+  let index = 0;
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (index < prefetched.length) {
+        controller.enqueue(prefetched[index]);
+        index += 1;
+        if (sourceDone && index === prefetched.length) {
+          release();
+          controller.close();
+        }
+        return;
+      }
+      if (sourceDone) {
+        release();
+        controller.close();
+        return;
+      }
+      try {
+        const step = await reader.read();
+        if (step.done) {
+          release();
+          controller.close();
+        } else {
+          controller.enqueue(step.value);
+        }
+      } catch (error) {
+        release();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        release();
+      }
+    },
+  });
+}
+
+/**
+ * Read only far enough to distinguish an immediate binding error from a real
+ * stream. This keeps normal token streaming intact while still allowing an
+ * opted-in dashboard request to retry before any Cloudflare output is sent.
+ */
+async function preflightCloudflareStream(upstream: ReadableStream): Promise<ReadableStream<Uint8Array>> {
+  const reader = upstream.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+  const decoder = new TextDecoder();
+  const prefetched: Uint8Array[] = [];
+  let prefix = '';
+  let byteLength = 0;
+  let sourceDone = false;
+
+  try {
+    while (byteLength < CLOUDFLARE_STREAM_PREFLIGHT_LIMIT) {
+      const step = await reader.read();
+      if (step.done) {
+        sourceDone = true;
+        prefix += decoder.decode();
+        const providerError = cloudflareProviderErrorInPrefix(prefix);
+        if (providerError) throw providerError;
+        break;
+      }
+      const chunk = step.value;
+      prefetched.push(chunk);
+      byteLength += chunk.byteLength;
+      prefix += decoder.decode(chunk, { stream: true });
+      const providerError = cloudflareProviderErrorInPrefix(prefix);
+      if (providerError) throw providerError;
+      if (hasCompleteProviderEvent(prefix)) break;
+    }
+    return replayPrefetchedStream(reader, prefetched, sourceDone);
+  } catch (error) {
+    await reader.cancel('Workers AI stream preflight failed').catch(() => undefined);
+    reader.releaseLock();
+    throw error;
+  }
+}
+
+function logProviderEvent(
+  event: string,
+  completionId: string,
+  model: string,
+  details: Record<string, string | boolean> = {},
+): void {
+  console.warn(JSON.stringify({ event, completion_id: completionId, model, ...details }));
+}
+
 export async function handleChatCompletions(
   request: Request,
   env: Env,
@@ -253,8 +411,8 @@ export async function handleChatCompletions(
   }
 
   const nvidiaModels = await getNvidiaModelIndex(env);
-  const model = resolveChatModel(body.model, env.DEFAULT_MODEL, nvidiaModels);
-  if (!model) {
+  const requestedModel = resolveChatModel(body.model, env.DEFAULT_MODEL, nvidiaModels);
+  if (!requestedModel) {
     return apiError(
       `The model '${body.model ?? ''}' does not exist or is not available. Call GET /v1/models for the list.`,
       404,
@@ -264,14 +422,33 @@ export async function handleChatCompletions(
     );
   }
 
-  const nvidiaProvider = isNvidiaModel(model, nvidiaModels);
+  const model = requestedModel;
+  const providerFallbackAllowed = trustedAccess
+    && body.allow_provider_fallback === true
+    && Boolean(env.NVIDIA_NIM_API_KEY?.trim())
+    && body.site_search !== true
+    && body.web_search_options?.scope !== 'site';
   let quotaObservationAt = new Date();
   if (isCloudflareModel(model)) {
     const quota = await cloudflareNeuronsExhausted(env, quotaObservationAt);
     if (quota.depleted) {
-      return cloudflareNeuronsExhaustedResponse();
+      const fallback = providerFallbackAllowed ? resolveNvidiaFallbackModel(model, nvidiaModels) : null;
+      if (!fallback) return cloudflareNeuronsExhaustedResponse();
+      const retryRequest = new Request(request.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...body, model: fallback, allow_provider_fallback: false }),
+      });
+      const fallbackResponse = await handleChatCompletions(retryRequest, env, ctx, true);
+      return withProviderFallbackHeaders(
+        fallbackResponse,
+        model,
+        fallback,
+        CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+      );
     }
   }
+  const nvidiaProvider = isNvidiaModel(model, nvidiaModels);
 
   const inputs: Record<string, unknown> = { messages };
   copyNumber(inputs, body, 'temperature');
@@ -292,7 +469,8 @@ export async function handleChatCompletions(
   };
   const accountStreamError = (code: string): void => {
     if (isCloudflareModel(model) && code === CLOUDFLARE_NEURONS_EXHAUSTED_CODE) {
-      ctx.waitUntil(recordCloudflareNeuronsExhausted(env.DB, quotaObservationAt).catch(() => undefined));
+      logProviderEvent('workers_ai_quota_rejected', id, model, { phase: 'stream' });
+      ctx.waitUntil(recordCloudflareNeuronsExhausted(env.DB, new Date()).catch(() => undefined));
     }
   };
 
@@ -495,10 +673,13 @@ export async function handleChatCompletions(
 
       if (body.stream === true) {
         if (!nvidiaProvider) quotaObservationAt = new Date();
-        const upstream = nvidiaProvider
+        const rawUpstream = nvidiaProvider
           ? (await requestNvidiaChat(env, model, nvidiaStreamBody(finalInputs))).body
           : (await env.AI.run(model as any, { ...finalInputs, stream: true } as any)) as ReadableStream;
-        if (!upstream) throw new Error('upstream returned no response body');
+        if (!rawUpstream) throw new Error('upstream returned no response body');
+        const upstream = nvidiaProvider
+          ? rawUpstream
+          : await preflightCloudflareStream(rawUpstream);
         const stream = toOpenAIStream(upstream, {
           id,
           model: responseModel,
@@ -548,10 +729,13 @@ export async function handleChatCompletions(
 
     if (body.stream === true) {
       if (!nvidiaProvider) quotaObservationAt = new Date();
-      const upstream = nvidiaProvider
+      const rawUpstream = nvidiaProvider
         ? (await requestNvidiaChat(env, model, nvidiaStreamBody(inputs))).body
         : (await env.AI.run(model as any, { ...inputs, stream: true } as any)) as ReadableStream;
-      if (!upstream) throw new Error('upstream returned no response body');
+      if (!rawUpstream) throw new Error('upstream returned no response body');
+      const upstream = nvidiaProvider
+        ? rawUpstream
+        : await preflightCloudflareStream(rawUpstream);
       const stream = toOpenAIStream(upstream, {
         id,
         model: responseModel,
@@ -583,8 +767,52 @@ export async function handleChatCompletions(
     return json(buildCompletion(id, responseModel, text, usage), 200, API_CORS);
   } catch (error) {
     if (isCloudflareModel(model) && isCloudflareNeuronsExhaustedError(error)) {
-      await recordCloudflareNeuronsExhausted(env.DB, quotaObservationAt).catch(() => undefined);
+      const observedAt = new Date();
+      await recordCloudflareNeuronsExhausted(env.DB, observedAt).catch(() => undefined);
+      logProviderEvent('workers_ai_quota_rejected', id, model, { phase: 'request' });
+      const fallback = providerFallbackAllowed ? resolveNvidiaFallbackModel(model, nvidiaModels) : null;
+      if (fallback) {
+        logProviderEvent('provider_fallback_started', id, model, {
+          fallback_model: fallback,
+          reason: CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+        });
+        const retryRequest = new Request(request.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...body, model: fallback, allow_provider_fallback: false }),
+        });
+        const fallbackResponse = await handleChatCompletions(retryRequest, env, ctx, true);
+        return withProviderFallbackHeaders(
+          fallbackResponse,
+          model,
+          fallback,
+          CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+        );
+      }
       return cloudflareNeuronsExhaustedResponse();
+    }
+    if (isCloudflareModel(model) && isCloudflarePaidPlanRequiredError(error)) {
+      logProviderEvent('workers_ai_paid_plan_required', id, model);
+      const fallback = providerFallbackAllowed ? resolveNvidiaFallbackModel(model, nvidiaModels) : null;
+      if (fallback) {
+        logProviderEvent('provider_fallback_started', id, model, {
+          fallback_model: fallback,
+          reason: CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+        });
+        const retryRequest = new Request(request.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...body, model: fallback, allow_provider_fallback: false }),
+        });
+        const fallbackResponse = await handleChatCompletions(retryRequest, env, ctx, true);
+        return withProviderFallbackHeaders(
+          fallbackResponse,
+          model,
+          fallback,
+          CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+        );
+      }
+      return cloudflarePaidPlanRequiredResponse();
     }
     const message = error instanceof Error ? error.message : String(error);
     const status = error instanceof NvidiaApiError ? error.status : 502;

@@ -5,10 +5,18 @@ import {
   type ConversationMessageRecord,
   type ConversationOwner,
 } from '../lib/conversations';
-import { CLOUDFLARE_NEURONS_EXHAUSTED_CODE } from '../lib/cloudflare-usage';
+import {
+  CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+} from '../lib/cloudflare-usage';
 import { wrapPersistedSseResponse, type PersistedAssistantResult } from '../lib/persisted-stream';
 import { json } from '../lib/http';
-import { handleChatCompletions } from './v1';
+import {
+  handleChatCompletions,
+  PROVIDER_FALLBACK_FROM_HEADER,
+  PROVIDER_FALLBACK_REASON_HEADER,
+  PROVIDER_FALLBACK_TO_HEADER,
+} from './v1';
 import { handleConversationApi } from './conversations';
 import type { AccessIdentity, ChatMessage, Env } from '../types';
 
@@ -20,6 +28,13 @@ const MAX_PROMPT_CHARACTERS = 160_000;
 interface TurnRequestBody {
   model: string;
   client_turn_id: string;
+  allow_provider_fallback?: boolean;
+}
+
+interface ProviderFallbackMetadata {
+  from: string;
+  to: string;
+  reason: string;
 }
 
 interface TurnDependencies {
@@ -143,6 +158,17 @@ function sameOriginResponse(response: Response): Response {
   });
 }
 
+function providerFallbackFromResponse(response: Response, requestedModel: string): ProviderFallbackMetadata | null {
+  const from = response.headers.get(PROVIDER_FALLBACK_FROM_HEADER)?.trim().slice(0, 200) ?? '';
+  const to = response.headers.get(PROVIDER_FALLBACK_TO_HEADER)?.trim().slice(0, 200) ?? '';
+  const rawReason = response.headers.get(PROVIDER_FALLBACK_REASON_HEADER)?.trim() ?? '';
+  const reason = rawReason === CLOUDFLARE_PAID_PLAN_REQUIRED_CODE
+    ? CLOUDFLARE_PAID_PLAN_REQUIRED_CODE
+    : CLOUDFLARE_NEURONS_EXHAUSTED_CODE;
+  if (!from || from !== requestedModel || !to || to.startsWith('@cf/')) return null;
+  return { from, to, reason };
+}
+
 async function persistFailedTurn(
   env: Env,
   ctx: ExecutionContext,
@@ -151,6 +177,7 @@ async function persistFailedTurn(
   turnId: string,
   model: string,
   code: string,
+  providerFallback: ProviderFallbackMetadata | null = null,
 ): Promise<boolean> {
   const persistence = finalizeConversationTurn(
     env.DB,
@@ -160,8 +187,12 @@ async function persistFailedTurn(
     {
       content: '',
       status: 'error',
-      model,
-      metadata: { failure: { code } },
+      model: providerFallback?.to ?? model,
+      lastModel: model,
+      metadata: {
+        ...(providerFallback ? { provider_fallback: providerFallback } : {}),
+        failure: { code },
+      },
     },
   ).then((saved) => {
     if (!saved || saved.status !== 'error') throw new Error('failed turn changed before finalization');
@@ -252,6 +283,7 @@ export async function handlePersistentConversationTurn(
       messages,
       stream: true,
       stream_options: { include_usage: true },
+      allow_provider_fallback: body.allow_provider_fallback === true,
     }),
   });
 
@@ -276,6 +308,7 @@ export async function handlePersistentConversationTurn(
   const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
   if (!upstream.ok || !upstream.body || !contentType.includes('text/event-stream')) {
     const failure = await safeUpstreamFailure(upstream);
+    const providerFallback = providerFallbackFromResponse(upstream, body.model);
     if (!await persistFailedTurn(
       env,
       ctx,
@@ -284,6 +317,7 @@ export async function handlePersistentConversationTurn(
       body.client_turn_id,
       body.model,
       failure.code,
+      providerFallback,
     )) {
       return errorResponse('conversation_storage_error', 'The failed turn could not be saved.', 503);
     }
@@ -291,13 +325,24 @@ export async function handlePersistentConversationTurn(
   }
 
   const sameOriginUpstream = sameOriginResponse(upstream);
+  const responseFallback = providerFallbackFromResponse(upstream, body.model);
 
   return wrapPersistedSseResponse(sameOriginUpstream, async (result: PersistedAssistantResult) => {
+    const completionModel = result.model ?? responseFallback?.to ?? body.model;
+    const providerFallback = responseFallback ?? (body.model.startsWith('@cf/') && !completionModel.startsWith('@cf/')
+      ? {
+          from: body.model,
+          to: completionModel,
+          reason: CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+        }
+      : null);
     const failureCode = result.errorCode === CLOUDFLARE_NEURONS_EXHAUSTED_CODE
-      ? CLOUDFLARE_NEURONS_EXHAUSTED_CODE
+      || result.errorCode === CLOUDFLARE_PAID_PLAN_REQUIRED_CODE
+      ? result.errorCode
       : 'upstream_error';
     const metadata = {
       ...result.metadata,
+      ...(providerFallback ? { provider_fallback: providerFallback } : {}),
       ...(result.usage ? { usage: result.usage } : {}),
       ...(result.error ? { failure: { code: failureCode } } : {}),
     };
@@ -309,7 +354,8 @@ export async function handlePersistentConversationTurn(
       {
         content: result.text,
         status: result.status,
-        model: body.model,
+        model: completionModel,
+        lastModel: body.model,
         metadata,
       },
     ).then((saved) => {

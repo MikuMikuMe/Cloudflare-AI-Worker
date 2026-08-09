@@ -1,7 +1,10 @@
 import {
   CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
   CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE,
   isCloudflareNeuronsExhaustedError,
+  isCloudflarePaidPlanRequiredError,
 } from './cloudflare-usage';
 import type { ChatMessage, Usage } from '../types';
 
@@ -112,6 +115,14 @@ function parseStreamLine(line: string, normalizeCloudflareQuota: boolean): {
         error: {
           message: CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
           code: CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+        },
+      };
+    }
+    if (normalizeCloudflareQuota && isCloudflarePaidPlanRequiredError(value)) {
+      return {
+        error: {
+          message: CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE,
+          code: CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
         },
       };
     }
@@ -282,6 +293,8 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
           if (cancelled) return;
           if (options.normalizeCloudflareQuota === true && isCloudflareNeuronsExhaustedError(error)) {
             fail(CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE, CLOUDFLARE_NEURONS_EXHAUSTED_CODE);
+          } else if (options.normalizeCloudflareQuota === true && isCloudflarePaidPlanRequiredError(error)) {
+            fail(CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE, CLOUDFLARE_PAID_PLAN_REQUIRED_CODE);
           } else {
             const message = error instanceof Error ? error.message : String(error);
             fail(`Upstream model error: ${message}`);

@@ -2,7 +2,10 @@ import { estimateTextTokens, extractText } from './chat';
 import {
   CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
   CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_CODE,
+  CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE,
   isCloudflareNeuronsExhaustedError,
+  isCloudflarePaidPlanRequiredError,
 } from './cloudflare-usage';
 import type { Usage } from '../types';
 
@@ -202,6 +205,10 @@ export function toOpenAISearchStream(
             fail(CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE, CLOUDFLARE_NEURONS_EXHAUSTED_CODE);
             return true;
           }
+          if (isCloudflarePaidPlanRequiredError(payload)) {
+            fail(CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE, CLOUDFLARE_PAID_PLAN_REQUIRED_CODE);
+            return true;
+          }
 
           const payloadRecord = asRecord(payload);
           const payloadError = asRecord(payloadRecord?.error);
@@ -253,6 +260,8 @@ export function toOpenAISearchStream(
           if (!finalized && !cancelled) {
             if (isCloudflareNeuronsExhaustedError(error)) {
               fail(CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE, CLOUDFLARE_NEURONS_EXHAUSTED_CODE);
+            } else if (isCloudflarePaidPlanRequiredError(error)) {
+              fail(CLOUDFLARE_PAID_PLAN_REQUIRED_MESSAGE, CLOUDFLARE_PAID_PLAN_REQUIRED_CODE);
             } else {
               const message = error instanceof Error ? error.message : String(error);
               fail(`Upstream web search error: ${message}`);

@@ -24,6 +24,12 @@ const CHAT_MODELS = [
   '@cf/aisingapore/gemma-sea-lion-v4-27b-it',
 ];
 
+const PAID_CLOUDFLARE_MODELS = new Set([
+  '@cf/zai-org/glm-5.2',
+  '@cf/moonshotai/kimi-k2.6',
+  '@cf/moonshotai/kimi-k2.7-code',
+]);
+
 const EMBEDDING_MODELS = [
   '@cf/baai/bge-base-en-v1.5',
   '@cf/baai/bge-large-en-v1.5',
@@ -48,10 +54,47 @@ const OPENAI_ALIASES: Record<string, string> = {
   'o3-mini': '@cf/openai/gpt-oss-20b',
 };
 
+export const PREFERRED_NVIDIA_FALLBACK = 'nvidia/nemotron-3-nano-30b-a3b';
+
+const GENERAL_NVIDIA_FALLBACKS = [
+  PREFERRED_NVIDIA_FALLBACK,
+  'google/gemma-4-31b-it',
+  'meta/llama-3.3-70b-instruct',
+  'openai/gpt-oss-20b',
+];
+
+const NVIDIA_FALLBACK_ALIASES: Record<string, string> = {
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast': 'meta/llama-3.3-70b-instruct',
+  '@cf/openai/gpt-oss-120b': 'openai/gpt-oss-120b',
+  '@cf/openai/gpt-oss-20b': 'openai/gpt-oss-20b',
+  '@cf/zai-org/glm-5.2': 'z-ai/glm-5.2',
+};
+
+/** Pick an indexed free NVIDIA endpoint without inventing an unavailable ID. */
+export function resolveNvidiaFallbackModel(
+  cloudflareModel: string,
+  nvidiaModels: readonly NvidiaModelRecord[],
+): string | null {
+  if (!isCloudflareModel(cloudflareModel) || !nvidiaModels.length) return null;
+  const available = new Set(nvidiaModels.map((model) => model.id));
+  const stripped = cloudflareModel.replace(/^@cf\//, '');
+  const candidates = [
+    NVIDIA_FALLBACK_ALIASES[cloudflareModel],
+    stripped,
+    stripped.replace(/-fp8-fast$/, ''),
+    stripped.replace(/-fp8$/, ''),
+    stripped.replace(/^zai-org\//, 'z-ai/'),
+    ...GENERAL_NVIDIA_FALLBACKS,
+  ];
+  return candidates.find((candidate): candidate is string => Boolean(candidate && available.has(candidate)))
+    ?? nvidiaModels[0]?.id
+    ?? null;
+}
+
 function modelPayload(
   id: string,
   provider: 'cloudflare' | 'nvidia',
-  options: { cloudflareDisabled?: boolean } = {},
+  options: { cloudflareDisabled?: boolean; fallbackModel?: string | null } = {},
 ): Record<string, unknown> {
   const disabled = provider === 'cloudflare' && options.cloudflareDisabled === true;
   return {
@@ -61,10 +104,12 @@ function modelPayload(
     owned_by: provider,
     provider,
     ...(provider === 'nvidia' ? { free_endpoint: true } : {}),
+    ...(provider === 'cloudflare' && PAID_CLOUDFLARE_MODELS.has(id) ? { requires_paid_plan: true } : {}),
+    ...(provider === 'cloudflare' && options.fallbackModel ? { fallback_model: options.fallbackModel } : {}),
     ...(disabled
       ? {
           disabled: true,
-          disabled_reason: 'Cloudflare Workers AI daily free-neuron limit reached.',
+          disabled_reason: 'Cloudflare is temporarily rejecting Workers AI inference after an allocation error.',
         }
       : {}),
   };
@@ -76,19 +121,26 @@ export interface ModelListOptions {
 }
 
 export function modelListPayload(options: ModelListOptions = {}): { object: 'list'; data: Array<Record<string, unknown>> } {
+  const nvidiaModels = options.nvidiaModels ?? [];
   return {
     object: 'list',
     data: [
-      ...CHAT_MODELS.map((id) => modelPayload(id, 'cloudflare', options)),
-      ...(options.nvidiaModels ?? []).map((model) => ({
+      ...CHAT_MODELS.map((id) => modelPayload(id, 'cloudflare', {
+        cloudflareDisabled: options.cloudflareDisabled,
+        fallbackModel: resolveNvidiaFallbackModel(id, nvidiaModels),
+      })),
+      ...nvidiaModels.map((model) => ({
         id: model.id,
         object: 'model',
         created: model.created,
         owned_by: model.owned_by,
         provider: 'nvidia',
         free_endpoint: true,
+        ...(model.id === PREFERRED_NVIDIA_FALLBACK ? { recommended_fallback: true } : {}),
       })),
-      ...EMBEDDING_MODELS.map((id) => modelPayload(id, 'cloudflare', options)),
+      ...EMBEDDING_MODELS.map((id) => modelPayload(id, 'cloudflare', {
+        cloudflareDisabled: options.cloudflareDisabled,
+      })),
     ],
   };
 }

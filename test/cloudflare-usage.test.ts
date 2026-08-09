@@ -5,11 +5,12 @@ import {
   cloudflareNeuronsExhausted,
   fetchCloudflareNeurons,
   isCloudflareNeuronsExhaustedError,
+  isCloudflarePaidPlanRequiredError,
   recordCloudflareNeuronsExhausted,
 } from '../src/lib/cloudflare-usage';
 
 function quotaDatabase(): D1Database {
-  let row: { provider: string; day: string; reason: string; expiresAt: number } | null = null;
+  let row: { provider: string; day: string; reason: string; expiresAt: number; observedAt: number } | null = null;
   return {
     prepare(query: string) {
       let values: unknown[] = [];
@@ -20,8 +21,9 @@ function quotaDatabase(): D1Database {
         },
         async first() {
           if (!query.includes('provider_daily_status') || !query.includes('SELECT') || !row) return null;
-          const [provider, day, now] = values;
+          const [provider, day, now, recentObservationCutoff] = values;
           return row.provider === provider && row.day === day && row.expiresAt > Number(now)
+            && row.observedAt > Number(recentObservationCutoff)
             ? { reason_code: row.reason }
             : null;
         },
@@ -32,6 +34,7 @@ function quotaDatabase(): D1Database {
               day: String(values[1]),
               reason: String(values[2]),
               expiresAt: Number(values[3]),
+              observedAt: Number(values[4]),
             };
           }
           return { success: true };
@@ -97,7 +100,7 @@ test('reads today’s Workers AI neurons from Cloudflare GraphQL analytics', asy
   }
 });
 
-test('treats quota-rejected analytics rows as exhausted even when they report zero neurons', async () => {
+test('does not turn a historical 4006 analytics row with zero neurons into an all-day circuit', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
     Response.json({
@@ -111,25 +114,33 @@ test('treats quota-rejected analytics rows as exhausted even when they report ze
   try {
     const result = await fetchCloudflareNeurons(environment() as any);
     assert.equal(result.used_neurons, 0);
-    assert.equal(result.quota_exhausted, true);
+    assert.equal(result.quota_exhausted, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('an authoritative quota circuit remains active only until the next UTC reset', async () => {
+test('an authoritative quota circuit is retried shortly and never crosses the next UTC reset', async () => {
   const db = quotaDatabase();
-  const observedAt = new Date('2026-08-09T23:59:00.000Z');
+  const observedAt = new Date('2026-08-09T12:00:00.000Z');
   await recordCloudflareNeuronsExhausted(db, observedAt);
 
   const env = { DB: db } as any;
-  const beforeReset = await cloudflareNeuronsExhausted(env, new Date('2026-08-09T23:59:59.999Z'));
-  assert.equal(beforeReset.depleted, true);
-  assert.equal(beforeReset.usage?.used_neurons, null);
-  assert.equal(beforeReset.usage?.source, 'workers-ai-binding-quota-circuit');
-  assert.equal(beforeReset.usage?.reset_at, '2026-08-10T00:00:00.000Z');
+  const beforeRetry = await cloudflareNeuronsExhausted(env, new Date('2026-08-09T12:04:59.999Z'));
+  assert.equal(beforeRetry.depleted, true);
+  assert.equal(beforeRetry.usage?.used_neurons, null);
+  assert.equal(beforeRetry.usage?.source, 'workers-ai-binding-quota-circuit');
+  assert.equal(beforeRetry.usage?.reset_at, '2026-08-10T00:00:00.000Z');
 
-  const afterReset = await cloudflareNeuronsExhausted(env, new Date('2026-08-10T00:00:00.000Z'));
+  const afterRetry = await cloudflareNeuronsExhausted(env, new Date('2026-08-09T12:05:00.000Z'));
+  assert.equal(afterRetry.depleted, false);
+
+  const nearResetDb = quotaDatabase();
+  await recordCloudflareNeuronsExhausted(nearResetDb, new Date('2026-08-09T23:59:00.000Z'));
+  const afterReset = await cloudflareNeuronsExhausted(
+    { DB: nearResetDb } as any,
+    new Date('2026-08-10T00:00:00.000Z'),
+  );
   assert.equal(afterReset.depleted, false);
 });
 
@@ -151,6 +162,12 @@ test('recognizes documented and production Workers AI quota errors without match
     true,
   );
   assert.equal(isCloudflareNeuronsExhaustedError(Object.assign(new Error('out of capacity'), { code: 3040 })), false);
+});
+
+test('recognizes the paid-model 5035 response without treating it as neuron exhaustion', () => {
+  const error = { error: { code: 5035, message: 'Upgrade to the Workers Paid plan' } };
+  assert.equal(isCloudflarePaidPlanRequiredError(error), true);
+  assert.equal(isCloudflareNeuronsExhaustedError(error), false);
 });
 
 test('returns zero when Cloudflare has no Workers AI inference rows today', async () => {
