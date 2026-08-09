@@ -37,9 +37,12 @@ function installSearchResponse(body: unknown = {
       engine: 'test',
     },
   ],
-}) {
+}, onRequest?: () => void) {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(body)) as typeof fetch;
+  globalThis.fetch = (async () => {
+    onRequest?.();
+    return Response.json(body);
+  }) as typeof fetch;
   return () => {
     globalThis.fetch = originalFetch;
   };
@@ -207,6 +210,7 @@ for (const model of ['@cf/qwen/qwen3-30b-a3b-fp8', '@cf/nvidia/nemotron-3-120b-a
 test('the selected model receives web tools even when it is not on a capability allowlist', async () => {
   const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
   const selectedModel = '@cf/meta/llama-3.1-8b-instruct-fp8';
+  const messages = [{ role: 'user', content: 'hi' }];
   const env = environment(async (model, input) => {
     calls.push({ model, input });
     return { response: 'Direct answer' };
@@ -214,8 +218,8 @@ test('the selected model receives web tools even when it is not on a capability 
 
   const result = await prepareWebSearchAgent(
     env,
-    [{ role: 'user', content: 'hi' }],
-    { messages: [{ role: 'user', content: 'hi' }] },
+    messages,
+    { messages, tool_choice: 'required' },
     { maxNumResults: 5, maxFetchChars: 20_000 },
     selectedModel,
   );
@@ -223,10 +227,15 @@ test('the selected model receives web tools even when it is not on a capability 
   assert.equal(result.performed, false);
   assert.equal(calls[0].model, selectedModel);
   assert.ok(calls[0].input.tools);
+  assert.deepEqual(calls[0].input.messages, messages);
+  assert.equal(calls[0].input.tool_choice, undefined);
 });
 
 test('chat completions expose tools but do not search when the model declines', async () => {
-  const restoreFetch = installSearchResponse();
+  let providerRequests = 0;
+  const restoreFetch = installSearchResponse(undefined, () => {
+    providerRequests += 1;
+  });
   try {
     const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
     const env = environment(async (model, input) => {
@@ -252,7 +261,9 @@ test('chat completions expose tools but do not search when the model declines', 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].model, MODEL);
     assert.ok(calls[0].input.tools);
-    assert.equal(calls[0].input.messages[0].role, 'system');
+    assert.deepEqual(calls[0].input.messages, [{ role: 'user', content: 'hi' }]);
+    assert.equal(calls[0].input.tool_choice, undefined);
+    assert.equal(providerRequests, 0);
   } finally {
     restoreFetch();
   }

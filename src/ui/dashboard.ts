@@ -604,7 +604,7 @@ export function dashboardPage(email: string, teamDomain: string): string {
           </div>
           <div class="chat-controls">
             <select id="model" aria-label="Chat model"></select>
-            <span class="search-status" title="The selected model can call server-managed web tools when needed">Web tools automatic</span>
+            <span class="search-status" title="The selected model can call server-managed web tools when needed">Web tools model-controlled</span>
             <label class="fallback-consent" id="fallback-consent" title="If Cloudflare rejects the request, this allows the current chat context to be sent to its mapped NVIDIA backup model.">
               <input id="provider-fallback" type="checkbox"> NVIDIA backup
             </label>
