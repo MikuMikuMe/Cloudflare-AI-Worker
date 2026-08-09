@@ -14,13 +14,19 @@ function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-function completionOptions(onDone: () => void) {
+function completionOptions(
+  onDone: () => void,
+  onError: (code: string) => void = () => undefined,
+  normalizeCloudflareQuota = false,
+) {
   return {
     id: 'chatcmpl-test',
     model: 'model/test',
     includeUsage: true,
     promptTokens: 4,
     onDone: () => onDone(),
+    onError,
+    normalizeCloudflareQuota,
   };
 }
 
@@ -75,6 +81,55 @@ test('model adapter propagates downstream cancellation to its upstream reader', 
   assert.equal(cancelReason, 'downstream stopped');
 });
 
+test('model adapter preserves a quota error that surfaces while reading the stream', async () => {
+  const codes: string[] = [];
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(Object.assign(new Error('account limited'), { code: 4006 }));
+    },
+  });
+
+  const output = await new Response(
+    toOpenAIStream(
+      upstream,
+      completionOptions(() => undefined, (code) => codes.push(code), true),
+    ),
+  ).text();
+
+  assert.match(output, /"code":"cloudflare_neurons_exhausted"/);
+  assert.match(output, /00:00 UTC reset/);
+  assert.doesNotMatch(output, /data: \[DONE\]/);
+  assert.deepEqual(codes, ['cloudflare_neurons_exhausted']);
+});
+
+test('model adapter preserves a structured quota error event', async () => {
+  const output = await new Response(
+    toOpenAIStream(
+      streamOf([
+        'data: {"error":{"code":4006,"message":"daily free allocation of 10,000 neurons reached"}}\n\n',
+      ]),
+      completionOptions(() => undefined, () => undefined, true),
+    ),
+  ).text();
+
+  assert.match(output, /"code":"cloudflare_neurons_exhausted"/);
+  assert.doesNotMatch(output, /data: \[DONE\]/);
+});
+
+test('model adapter does not label another provider numeric error as Cloudflare quota', async () => {
+  const output = await new Response(
+    toOpenAIStream(
+      streamOf([
+        'data: {"error":{"code":4006,"message":"provider-specific failure"}}\n\n',
+      ]),
+      completionOptions(() => undefined),
+    ),
+  ).text();
+
+  assert.match(output, /"code":"upstream_error"/);
+  assert.doesNotMatch(output, /cloudflare_neurons_exhausted/);
+});
+
 test('AI Search adapter reports truncated EOF without synthesizing DONE or usage completion', async () => {
   let completions = 0;
   const output = await new Response(
@@ -125,4 +180,24 @@ test('AI Search adapter propagates downstream cancellation to its upstream reade
   await reader.cancel('downstream stopped');
 
   assert.equal(cancelReason, 'downstream stopped');
+});
+
+test('AI Search adapter preserves a stream-time neuron quota failure', async () => {
+  const codes: string[] = [];
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(Object.assign(new Error('account limited'), { code: 4006 }));
+    },
+  });
+
+  const output = await new Response(
+    toOpenAISearchStream(
+      upstream,
+      completionOptions(() => undefined, (code) => codes.push(code)),
+    ),
+  ).text();
+
+  assert.match(output, /"code":"cloudflare_neurons_exhausted"/);
+  assert.deepEqual(codes, ['cloudflare_neurons_exhausted']);
+  assert.doesNotMatch(output, /data: \[DONE\]/);
 });

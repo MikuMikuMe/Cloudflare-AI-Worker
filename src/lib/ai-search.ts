@@ -1,4 +1,9 @@
 import { estimateTextTokens, extractText } from './chat';
+import {
+  CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+  CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+  isCloudflareNeuronsExhaustedError,
+} from './cloudflare-usage';
 import type { Usage } from '../types';
 
 export interface AiSearchStreamOptions {
@@ -7,6 +12,7 @@ export interface AiSearchStreamOptions {
   includeUsage: boolean;
   promptTokens: number;
   onDone: (usage: Usage) => void;
+  onError?: (code: string) => void;
 }
 
 export interface AiSearchSource {
@@ -149,12 +155,17 @@ export function toOpenAISearchStream(
           controller.close();
         };
 
-        const fail = (message: string): void => {
+        const fail = (message: string, code = 'upstream_error'): void => {
           if (finalized || cancelled) return;
           finalized = true;
+          try {
+            options.onError?.(code);
+          } catch {
+            // Error reporting must not replace the original stream failure.
+          }
           controller.enqueue(
             sseLine(encoder, {
-              error: { message, type: 'api_error', code: 'upstream_error' },
+              error: { message, type: 'api_error', code },
             }),
           );
           controller.close();
@@ -187,10 +198,24 @@ export function toOpenAISearchStream(
           }
 
           const payload = parseJson(data);
+          if (isCloudflareNeuronsExhaustedError(payload)) {
+            fail(CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE, CLOUDFLARE_NEURONS_EXHAUSTED_CODE);
+            return true;
+          }
+
+          const payloadRecord = asRecord(payload);
+          const payloadError = asRecord(payloadRecord?.error);
+          if (payloadError) {
+            const message = typeof payloadError.message === 'string' && payloadError.message.trim()
+              ? `Upstream web search error: ${payloadError.message}`
+              : 'Upstream web search stream failed.';
+            fail(message);
+            return true;
+          }
+
           if (payload) {
             const piece = extractText(payload);
             if (piece) text += piece;
-            const payloadRecord = asRecord(payload);
             const choices = Array.isArray(payloadRecord?.choices) ? payloadRecord.choices : [];
             const choice = asRecord(choices[0]);
             if (choice?.finish_reason) sawFinish = true;
@@ -226,8 +251,12 @@ export function toOpenAISearchStream(
           if (!finalized) fail('Upstream web search stream ended before completion.');
         } catch (error) {
           if (!finalized && !cancelled) {
-            const message = error instanceof Error ? error.message : String(error);
-            fail(`Upstream web search error: ${message}`);
+            if (isCloudflareNeuronsExhaustedError(error)) {
+              fail(CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE, CLOUDFLARE_NEURONS_EXHAUSTED_CODE);
+            } else {
+              const message = error instanceof Error ? error.message : String(error);
+              fail(`Upstream web search error: ${message}`);
+            }
           }
         } finally {
           if (upstreamReader === reader) upstreamReader = null;

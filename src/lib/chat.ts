@@ -1,3 +1,8 @@
+import {
+  CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+  CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+  isCloudflareNeuronsExhaustedError,
+} from './cloudflare-usage';
 import type { ChatMessage, Usage } from '../types';
 
 interface CompletionOptions {
@@ -8,6 +13,8 @@ interface CompletionOptions {
   onDone: (usage: Usage) => void;
   priorUsage?: Usage;
   webSearch?: Record<string, unknown>;
+  onError?: (code: string) => void;
+  normalizeCloudflareQuota?: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -87,7 +94,11 @@ export function buildCompletion(id: string, model: string, text: string, usage: 
   };
 }
 
-function parseStreamLine(line: string): { text?: string; done?: boolean } {
+function parseStreamLine(line: string, normalizeCloudflareQuota: boolean): {
+  text?: string;
+  done?: boolean;
+  error?: { message: string; code: string };
+} {
   let payload = line.trim();
   if (!payload) return {};
   if (payload.startsWith('data:')) payload = payload.slice(5).trim();
@@ -95,7 +106,25 @@ function parseStreamLine(line: string): { text?: string; done?: boolean } {
   if (payload === '[DONE]') return { done: true };
 
   try {
-    return { text: extractText(JSON.parse(payload)) };
+    const value: unknown = JSON.parse(payload);
+    if (normalizeCloudflareQuota && isCloudflareNeuronsExhaustedError(value)) {
+      return {
+        error: {
+          message: CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+          code: CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+        },
+      };
+    }
+
+    const record = asRecord(value);
+    const error = asRecord(record?.error);
+    if (error) {
+      const message = typeof error.message === 'string' && error.message.trim()
+        ? `Upstream model error: ${error.message}`
+        : 'Upstream model stream failed.';
+      return { error: { message, code: 'upstream_error' } };
+    }
+    return { text: extractText(value) };
   } catch {
     // A few Workers AI model versions emit plain text lines.
     return { text: payload };
@@ -158,20 +187,31 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
         let buffer = '';
         let text = '';
         let finishedByUpstream = false;
+        let failedByUpstream = false;
 
-        const fail = (message: string): void => {
+        const fail = (message: string, code = 'upstream_error'): void => {
           if (cancelled) return;
+          try {
+            options.onError?.(code);
+          } catch {
+            // Error reporting must not replace the original stream failure.
+          }
           controller.enqueue(
             sseLine(encoder, {
-              error: { message, type: 'api_error', code: 'upstream_error' },
+              error: { message, type: 'api_error', code },
             }),
           );
           controller.close();
         };
 
         const consumeLine = (line: string): boolean => {
-          const parsed = parseStreamLine(line);
+          const parsed = parseStreamLine(line, options.normalizeCloudflareQuota === true);
           if (parsed.done) return true;
+          if (parsed.error) {
+            failedByUpstream = true;
+            fail(parsed.error.message, parsed.error.code);
+            return true;
+          }
           if (!parsed.text) return false;
           text += parsed.text;
           controller.enqueue(
@@ -206,6 +246,7 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
           if (cancelled) return;
           buffer += decoder.decode();
           if (buffer.trim() && !finishedByUpstream) finishedByUpstream = consumeLine(buffer);
+          if (failedByUpstream) return;
           if (!finishedByUpstream) {
             fail('Upstream model stream ended before completion.');
             return;
@@ -239,8 +280,12 @@ export function toOpenAIStream(upstream: ReadableStream, options: CompletionOpti
           controller.close();
         } catch (error) {
           if (cancelled) return;
-          const message = error instanceof Error ? error.message : String(error);
-          fail(`Upstream model error: ${message}`);
+          if (options.normalizeCloudflareQuota === true && isCloudflareNeuronsExhaustedError(error)) {
+            fail(CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE, CLOUDFLARE_NEURONS_EXHAUSTED_CODE);
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            fail(`Upstream model error: ${message}`);
+          }
         } finally {
           if (upstreamReader === reader) upstreamReader = null;
           reader.releaseLock();

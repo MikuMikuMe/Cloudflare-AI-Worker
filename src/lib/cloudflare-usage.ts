@@ -2,6 +2,13 @@ import type { Env } from '../types';
 
 const CLOUDFLARE_GRAPHQL_ENDPOINT = 'https://api.cloudflare.com/client/v4/graphql';
 const DAILY_NEURON_LIMIT = 10_000;
+const QUOTA_ERROR_CODES = new Set(['3036', '4006']);
+const PROVIDER_STATUS_KEY = 'cloudflare-workers-ai';
+
+export const CLOUDFLARE_NEURONS_EXHAUSTED_CODE = 'cloudflare_neurons_exhausted';
+export const CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE =
+  "Cloudflare Workers AI has reached this account's daily 10,000-Neuron allocation. Cloudflare models resume after the 00:00 UTC reset; chat requests can use an NVIDIA model now. A Workers plan upgrade prevents future free-allocation failures.";
+
 const WORKERS_AI_USAGE_QUERY = `
   query WorkersAiDailyUsage($accountTag: string, $start: Time, $end: Time) {
     viewer {
@@ -13,6 +20,7 @@ const WORKERS_AI_USAGE_QUERY = `
           datetime
           neurons
           sampleInterval
+          errorCode
         }
       }
     }
@@ -23,9 +31,11 @@ type JsonRecord = Record<string, unknown>;
 
 export type CloudflareNeuronsUsage = {
   date_utc: string;
-  used_neurons: number;
+  used_neurons: number | null;
   daily_limit_neurons: number;
-  source: 'cloudflare-account-analytics-api';
+  quota_exhausted: boolean;
+  reset_at: string;
+  source: 'cloudflare-account-analytics-api' | 'workers-ai-binding-quota-circuit';
 };
 
 export type CloudflareUsageErrorCode =
@@ -45,13 +55,115 @@ export class CloudflareUsageError extends Error {
   }
 }
 
+function quotaErrorCode(value: unknown): boolean {
+  return QUOTA_ERROR_CODES.has(String(value ?? '').trim());
+}
+
+/**
+ * Cloudflare currently documents account-limit error 3036, while production
+ * Workers AI binding and analytics responses can emit 4006 for the same
+ * 10,000-Neuron free-allocation rejection. Accept both plus the guarded
+ * message form so callers do not collapse an actionable 429 into a generic
+ * upstream 502 when the binding omits a structured code.
+ */
+export function isCloudflareNeuronsExhaustedError(error: unknown): boolean {
+  const record = isRecord(error) ? error : null;
+  const nestedError = isRecord(record?.error) ? record.error : null;
+  const cause = isRecord(record?.cause) ? record.cause : null;
+  const nestedCause = isRecord(nestedError?.cause) ? nestedError.cause : null;
+  if (
+    quotaErrorCode(record?.code) ||
+    quotaErrorCode(record?.errorCode) ||
+    quotaErrorCode(nestedError?.code) ||
+    quotaErrorCode(nestedError?.errorCode) ||
+    quotaErrorCode(cause?.code) ||
+    quotaErrorCode(cause?.errorCode) ||
+    quotaErrorCode(nestedCause?.code) ||
+    quotaErrorCode(nestedCause?.errorCode)
+  ) {
+    return true;
+  }
+
+  const message = [
+    error instanceof Error ? error.message : typeof error === 'string' ? error : '',
+    textField(record ?? {}, 'message'),
+    textField(nestedError ?? {}, 'message'),
+    textField(cause ?? {}, 'message'),
+    textField(nestedCause ?? {}, 'message'),
+  ].filter(Boolean).join(' ');
+
+  if (/workers_ai_free_allocation_exceeded/i.test(message)) return true;
+  if (/(?:^|\D)(?:3036|4006)(?:\D|$)/.test(message) && /(?:neuron|allocation|account limited)/i.test(message)) {
+    return true;
+  }
+  return /daily free allocation/i.test(message) && /10,?000\s+neurons/i.test(message);
+}
+
+function quotaWindow(now: Date): { day: string; resetAt: number } {
+  const day = utcDay(now);
+  return {
+    day,
+    resetAt: Date.parse(`${day}T00:00:00.000Z`) + 86400_000,
+  };
+}
+
+async function hasConfirmedQuotaExhaustion(db: D1Database, now: Date): Promise<boolean> {
+  const { day } = quotaWindow(now);
+  try {
+    const row = await db.prepare(
+      `SELECT reason_code
+         FROM provider_daily_status
+        WHERE provider = ? AND day_utc = ? AND state = 'quota_exhausted' AND expires_at > ?
+        LIMIT 1`,
+    ).bind(PROVIDER_STATUS_KEY, day, now.getTime()).first<{ reason_code: string }>();
+    return row?.reason_code === CLOUDFLARE_NEURONS_EXHAUSTED_CODE;
+  } catch {
+    // Deploys remain fail-open if the additive migration has not landed yet.
+    return false;
+  }
+}
+
+export async function recordCloudflareNeuronsExhausted(db: D1Database, now = new Date()): Promise<void> {
+  const { day, resetAt } = quotaWindow(now);
+  await db.prepare(
+    `INSERT INTO provider_daily_status
+       (provider, day_utc, state, reason_code, expires_at, observed_at)
+     VALUES (?, ?, 'quota_exhausted', ?, ?, ?)
+     ON CONFLICT(provider, day_utc) DO UPDATE SET
+       state = excluded.state,
+       reason_code = excluded.reason_code,
+       expires_at = excluded.expires_at,
+       observed_at = excluded.observed_at`,
+  ).bind(
+    PROVIDER_STATUS_KEY,
+    day,
+    CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+    resetAt,
+    now.getTime(),
+  ).run();
+}
+
+function confirmedQuotaUsage(now: Date): CloudflareNeuronsUsage {
+  const { day, resetAt } = quotaWindow(now);
+  return {
+    date_utc: day,
+    used_neurons: null,
+    daily_limit_neurons: DAILY_NEURON_LIMIT,
+    quota_exhausted: true,
+    reset_at: new Date(resetAt).toISOString(),
+    source: 'workers-ai-binding-quota-circuit',
+  };
+}
+
 /**
  * Read the account-level Workers AI Neurons metric from the same GraphQL
  * analytics dataset used by Cloudflare's Workers AI dashboard. The API token
  * is deliberately server-side only; the dashboard browser receives the small
  * normalized result below, never the token or raw analytics rows.
  */
-export async function fetchCloudflareNeurons(env: Env): Promise<CloudflareNeuronsUsage> {
+export async function fetchCloudflareNeurons(env: Env, now = new Date()): Promise<CloudflareNeuronsUsage> {
+  if (await hasConfirmedQuotaExhaustion(env.DB, now)) return confirmedQuotaUsage(now);
+
   const accountId = env.CLOUDFLARE_ACCOUNT_ID?.trim();
   const token = env.CLOUDFLARE_USAGE_API_TOKEN?.trim();
 
@@ -63,8 +175,8 @@ export async function fetchCloudflareNeurons(env: Env): Promise<CloudflareNeuron
     );
   }
 
-  const day = utcDay(new Date());
-  const tomorrow = utcDay(new Date(Date.parse(`${day}T00:00:00.000Z`) + 86400_000));
+  const { day, resetAt } = quotaWindow(now);
+  const tomorrow = utcDay(new Date(resetAt));
 
   let response: Response;
   try {
@@ -120,15 +232,18 @@ export async function fetchCloudflareNeurons(env: Env): Promise<CloudflareNeuron
     );
   }
 
-  const records = extractInferenceRecords(body);
-  const usedNeurons = records
-    .filter((record) => recordBelongsToDay(record, day))
+  const records = extractInferenceRecords(body).filter((record) => recordBelongsToDay(record, day));
+  const observedNeurons = records
     .reduce((sum, record) => sum + neuronQuantity(record), 0);
+  const quotaExhausted = records.some((record) => quotaErrorCode(record.errorCode)) || observedNeurons >= DAILY_NEURON_LIMIT;
+  if (quotaExhausted) await recordCloudflareNeuronsExhausted(env.DB, now).catch(() => undefined);
 
   return {
     date_utc: day,
-    used_neurons: roundNeurons(usedNeurons),
+    used_neurons: roundNeurons(observedNeurons),
     daily_limit_neurons: DAILY_NEURON_LIMIT,
+    quota_exhausted: quotaExhausted,
+    reset_at: new Date(resetAt).toISOString(),
     source: 'cloudflare-account-analytics-api',
   };
 }
@@ -140,14 +255,11 @@ export async function fetchCloudflareNeurons(env: Env): Promise<CloudflareNeuron
  */
 export async function cloudflareNeuronsExhausted(
   env: Env,
+  now = new Date(),
 ): Promise<{ depleted: boolean; usage?: CloudflareNeuronsUsage }> {
-  if (!env.CLOUDFLARE_ACCOUNT_ID?.trim() || !env.CLOUDFLARE_USAGE_API_TOKEN?.trim()) {
-    return { depleted: false };
-  }
-
   try {
-    const usage = await fetchCloudflareNeurons(env);
-    return { depleted: usage.used_neurons >= usage.daily_limit_neurons, usage };
+    const usage = await fetchCloudflareNeurons(env, now);
+    return { depleted: usage.quota_exhausted, usage };
   } catch {
     return { depleted: false };
   }

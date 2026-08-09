@@ -84,6 +84,22 @@ test('persists an error when the upstream emits an SSE error', async () => {
   assert.doesNotMatch(JSON.stringify(calls[0]), /debug|secret/);
 });
 
+test('preserves the canonical quota code without persisting provider details', async () => {
+  const calls: PersistedAssistantResult[] = [];
+  const response = wrapPersistedSseResponse(
+    sseResponse([
+      'data: {"error":{"message":"safe quota guidance","code":"cloudflare_neurons_exhausted","debug":"provider detail"}}\n\n',
+    ]),
+    async (result) => calls.push(result),
+  );
+
+  await response.text();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].status, 'error');
+  assert.equal(calls[0].errorCode, 'cloudflare_neurons_exhausted');
+  assert.doesNotMatch(JSON.stringify(calls[0]), /debug|provider detail/);
+});
+
 test('marks a response interrupted when the upstream closes without DONE', async () => {
   const calls: PersistedAssistantResult[] = [];
   const response = wrapPersistedSseResponse(
