@@ -3,7 +3,7 @@ export interface Env {
   AI_SEARCH: AiSearchInstance;
   DB: D1Database;
   DEFAULT_MODEL: string;
-  /** Existing Workers AI model used for the default web-search planning turn. */
+  /** Compatibility fallback for direct web-search helper callers without a selected model. */
   WEB_SEARCH_MODEL?: string;
   /** Optional zero-setup Cloudflare Web Search binding (discovery only). */
   WEBSEARCH?: WebSearch;
@@ -79,7 +79,7 @@ export interface ChatCompletionRequest {
   messages?: ChatMessage[];
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
-  /** Legacy compatibility flag. Public web search is always enabled for chat. */
+  /** Legacy compatibility flag; model tool choice is the source of truth. */
   web_search?: boolean;
   /** Search the configured ai.lofuyu.com AI Search index instead of the public web. */
   site_search?: boolean;

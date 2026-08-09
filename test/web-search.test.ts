@@ -51,30 +51,31 @@ test('Workers AI tool properties use the accepted legacy schema', () => {
   }
 });
 
-test('a planner input error falls back to deterministic web search', async () => {
+test('a planner input error falls back to a normal answer without searching', async () => {
   const restoreFetch = installSearchResponse();
   try {
     const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
     const env = environment(async (model, input) => {
       calls.push({ model, input });
       if (input.tools) throw new Error('8001: Invalid input');
-      return { response: 'Grounded answer', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+      return { response: 'Normal answer', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
     });
 
     const result = await prepareWebSearchAgent(
       env,
-      [{ role: 'user', content: 'What is current on the web?', }],
-      { messages: [{ role: 'user', content: 'What is current on the web?' }] },
+      [{ role: 'user', content: 'Say hello.' }],
+      { messages: [{ role: 'user', content: 'Say hello.' }] },
       { maxNumResults: 5, maxFetchChars: 20_000 },
       MODEL,
     );
 
-    assert.equal(result.provider, 'searxng');
-    assert.equal(result.sources.length, 1);
-    assert.deepEqual(result.searches, [
-      { query: 'What is current on the web?', result_count: 1, provider: 'searxng' },
-    ]);
-    assert.equal(calls.length, 1);
+    assert.equal(result.performed, false);
+    assert.equal(result.response && (result.response as any).response, 'Normal answer');
+    assert.equal(result.provider, null);
+    assert.equal(result.sources.length, 0);
+    assert.equal(result.searches.length, 0);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].input.tools, undefined);
   } finally {
     restoreFetch();
   }
@@ -109,7 +110,61 @@ for (const model of ['@cf/qwen/qwen3-30b-a3b-fp8', '@cf/nvidia/nemotron-3-120b-a
   });
 }
 
-test('chat completions search by default without a web_search request flag', async () => {
+test('the selected model receives web tools even when it is not on a capability allowlist', async () => {
+  const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
+  const selectedModel = '@cf/meta/llama-3.1-8b-instruct-fp8';
+  const env = environment(async (model, input) => {
+    calls.push({ model, input });
+    return { response: 'Direct answer' };
+  });
+
+  const result = await prepareWebSearchAgent(
+    env,
+    [{ role: 'user', content: 'hi' }],
+    { messages: [{ role: 'user', content: 'hi' }] },
+    { maxNumResults: 5, maxFetchChars: 20_000 },
+    selectedModel,
+  );
+
+  assert.equal(result.performed, false);
+  assert.equal(calls[0].model, selectedModel);
+  assert.ok(calls[0].input.tools);
+});
+
+test('chat completions expose tools but do not search when the model declines', async () => {
+  const restoreFetch = installSearchResponse();
+  try {
+    const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
+    const env = environment(async (model, input) => {
+      calls.push({ model, input });
+      return { response: 'Hello without searching.', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+    });
+
+    const response = await handleChatCompletions(
+      new Request('https://ai.example.test/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: MODEL, messages: [{ role: 'user', content: 'hi' }] }),
+      }),
+      env,
+      context(),
+      true,
+    );
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as any;
+    assert.equal(body.choices[0].message.content, 'Hello without searching.');
+    assert.equal(body.web_search, undefined);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].model, MODEL);
+    assert.ok(calls[0].input.tools);
+    assert.equal(calls[0].input.messages[0].role, 'system');
+  } finally {
+    restoreFetch();
+  }
+});
+
+test('chat completions execute web tools only after the model calls one', async () => {
   const restoreFetch = installSearchResponse();
   try {
     const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
@@ -136,10 +191,9 @@ test('chat completions search by default without a web_search request flag', asy
     const body = await response.json() as any;
     assert.equal(body.choices[0].message.content, 'Grounded answer');
     assert.equal(body.web_search.provider, 'searxng');
-    assert.equal(body.web_search.sources[0].url, 'https://example.com/current-fact');
     assert.equal(body.web_search.performed, true);
-    assert.equal(body.web_search.queries[0].result_count, 1);
-    assert.equal(calls[0].model, MODEL);
+    assert.equal(body.web_search.sources[0].url, 'https://example.com/current-fact');
+    assert.ok(calls.length >= 2);
     assert.ok(calls[0].input.tools);
   } finally {
     restoreFetch();

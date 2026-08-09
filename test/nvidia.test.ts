@@ -118,12 +118,14 @@ test('model list disables Cloudflare models while keeping NVIDIA models selectab
 test('NVIDIA model uses the same default web-search and OpenAI response path', async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
+  let plannerTools: unknown;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     calls.push(url);
     if (url.includes('/chat/completions')) {
       const requestBody = JSON.parse(String(init?.body));
       if (requestBody.tools) {
+        plannerTools = requestBody.tools;
         return Response.json({
           choices: [{ message: { content: '', tool_calls: [{ id: 'search-1', type: 'function', function: { name: 'web_search', arguments: JSON.stringify({ query: 'current fact' }) } }] } }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
@@ -166,6 +168,8 @@ test('NVIDIA model uses the same default web-search and OpenAI response path', a
     const body = await response.json() as any;
     assert.equal(body.choices[0].message.content, 'Grounded NVIDIA answer');
     assert.equal(body.web_search.performed, true);
+    assert.equal((plannerTools as any[])[0].type, 'function');
+    assert.equal((plannerTools as any[])[0].function.name, 'web_search');
     assert.ok(calls.filter((url) => url.includes('/chat/completions')).length >= 2);
   } finally {
     globalThis.fetch = originalFetch;

@@ -160,13 +160,47 @@ function copyNvidiaInputs(target: Record<string, unknown>, body: ChatCompletionR
   if (typeof body.stop === 'string' || Array.isArray(body.stop)) target.stop = body.stop;
 }
 
+function toNvidiaToolSchema(inputs: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(inputs.tools)) return inputs;
+  return {
+    ...inputs,
+    tools: inputs.tools.flatMap((tool) => {
+      if (!tool || typeof tool !== 'object') return [];
+      const value = tool as Record<string, unknown>;
+      if (value.type === 'function' && value.function && typeof value.function === 'object') return [value];
+      if (typeof value.name !== 'string' || !value.name.trim()) return [];
+      return [
+        {
+          type: 'function',
+          function: {
+            name: value.name.trim(),
+            ...(typeof value.description === 'string' ? { description: value.description } : {}),
+            ...(value.parameters && typeof value.parameters === 'object' ? { parameters: value.parameters } : {}),
+          },
+        },
+      ];
+    }),
+  };
+}
+
 function nvidiaRunner(env: Env, model: string) {
   return async (requestedModel: string, input: Record<string, unknown>): Promise<unknown> =>
-    requestNvidiaJson(env, requestedModel || model, input);
+    requestNvidiaJson(env, requestedModel || model, toNvidiaToolSchema(input));
 }
 
 function nvidiaStreamBody(inputs: Record<string, unknown>): Record<string, unknown> {
   return { ...inputs, stream: true };
+}
+
+function bufferedModelStream(value: unknown): ReadableStream<Uint8Array> {
+  const payload = JSON.stringify(value ?? { response: '' }) ?? '{"response":""}';
+  const bytes = new TextEncoder().encode(`${payload}\n`);
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
 }
 
 export async function handleChatCompletions(
@@ -290,17 +324,17 @@ export async function handleChatCompletions(
     if (body.web_search_options.scope != null) searchScope = body.web_search_options.scope;
   }
 
-  // Public web search is part of every chat completion. The legacy
-  // `web_search` flag is accepted but no longer controls execution; clients
-  // can still explicitly choose the indexed site-search path.
+  // The legacy `web_search` flag is accepted for compatibility but does not
+  // force execution. When a live provider is configured, its tools are exposed
+  // to the selected model and the model decides whether to call them.
   const siteSearchEnabled = body.site_search === true || searchScope === 'site';
-  const webSearchEnabled = !siteSearchEnabled;
+  const webSearchEnabled = !siteSearchEnabled && Boolean(env.WEBSEARCH || env.SEARXNG_URL);
 
   try {
     if (siteSearchEnabled) {
       if (nvidiaProvider) {
         return apiError(
-          'Indexed Cloudflare AI Search is available only for Cloudflare models. Use the automatic live web-search path with this NVIDIA model.',
+          'Indexed Cloudflare AI Search is available only for Cloudflare models. Use the model-controlled live web tools with this NVIDIA model.',
           400,
           'invalid_request_error',
           'unsupported_value',
@@ -400,6 +434,34 @@ export async function handleChatCompletions(
         throw error;
       }
 
+      if (!webAgent.performed) {
+        const raw = webAgent.response ?? { response: '' };
+        const text = extractText(raw);
+        const usage = webAgent.priorUsage;
+        accountUsage(usage);
+
+        if (body.stream === true) {
+          const stream = toOpenAIStream(bufferedModelStream(raw), {
+            id,
+            model: responseModel,
+            includeUsage: body.stream_options?.include_usage === true,
+            promptTokens,
+            onDone: () => undefined,
+          });
+          return new Response(stream, {
+            headers: {
+              'content-type': 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache, no-transform',
+              connection: 'keep-alive',
+              'x-accel-buffering': 'no',
+              ...API_CORS,
+            },
+          });
+        }
+
+        return json(buildCompletion(id, responseModel, text, usage), 200, API_CORS);
+      }
+
       const finalInputs: Record<string, unknown> = { ...inputs, messages: webAgent.messages };
       const finalPromptTokens = estimatePromptTokens(webAgent.messages);
       const webSearchSources = webAgent.sources.map((source) => ({ ...source }));
@@ -431,7 +493,7 @@ export async function handleChatCompletions(
             'cache-control': 'no-cache, no-transform',
             connection: 'keep-alive',
             'x-accel-buffering': 'no',
-            'x-web-search-provider': webAgent.provider,
+            'x-web-search-provider': webAgent.provider ?? 'unknown',
             ...API_CORS,
           },
         });

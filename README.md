@@ -6,7 +6,7 @@ An OpenAI-compatible gateway backed by the existing Cloudflare Workers AI and D1
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`, including Server-Sent Events streaming with `stream: true`
-- Automatic live web search on every chat completion through Cloudflare Web Search, with the configured SearXNG-compatible fallback
+- Model-controlled live web tools exposed to chat completions through Cloudflare Web Search, with the configured SearXNG-compatible fallback
 - Optional per-request search over the indexed `ai.lofuyu.com` website with `site_search: true`
 - `POST /v1/embeddings`
 - OpenAI-style API keys created and revoked from the authenticated dashboard
@@ -23,13 +23,13 @@ The Worker keeps the NVIDIA NIM credential server-side in the `NVIDIA_NIM_API_KE
 
 When the live Cloudflare Workers AI Neurons metric reaches the daily limit, all Cloudflare models are returned with `disabled: true` and the dashboard greys them out. Requests for those models return a clear `429` with `code: "cloudflare_neurons_exhausted"`; NVIDIA models remain available. The existing D1 database stores the small model index, and the cron uses the current Worker only—no additional service is created.
 
-## Automatic live search
+## Model-controlled live search
 
-Every `POST /v1/chat/completions` request runs a server-owned web-search tool loop:
+When a live provider is configured, every `POST /v1/chat/completions` request exposes a server-owned web tool list to the selected model:
 
-1. A function-calling-capable Workers AI model receives the server-owned `web_search` and `web_fetch` tools by default.
-2. The Worker uses the managed Cloudflare Web Search binding when available, or the explicitly configured SearXNG-compatible fallback, then fetches selected public pages.
-3. The requested chat model receives a bounded evidence message and streams the final answer. If the planner/model rejects tool input, the Worker performs one deterministic search and continues.
+1. The selected model receives `web_search` and `web_fetch` with normal optional tool semantics; it can answer directly without calling either tool.
+2. If the model emits a server-owned tool call, the Worker uses the managed Cloudflare Web Search binding when available, or the explicitly configured SearXNG-compatible fallback, then fetches selected public pages.
+3. The tool results are returned to the selected model for its final answer. If the model/runtime rejects the optional tool schema, the Worker retries without tools and never performs a forced search.
 
 The managed binding is zero-setup and discovery-only: it returns public URLs and catalog metadata, while the Worker fetches page content itself. It does not create an AI Search instance, container, database, or other service. If the account returns `account_disabled` for the experimental Cloudflare Web Search binding, the deployed code transparently falls back to the configured SearXNG endpoint. Every completion reports `web_search.performed`, the provider, executed query/result counts, and source URLs; streaming clients receive the same metadata in an empty-choice SSE chunk. The Worker never accepts client-defined executable functions; it only executes the two read-only web tools.
 
@@ -53,7 +53,7 @@ Use `site_search: true` (or `web_search_options: { "scope": "site" }`) to use th
 
 `web_search_options.max_num_results` accepts 1-50 (Cloudflare Web Search returns at most 20; the fallback returns at most 10), and `max_fetch_chars` accepts 2,000-40,000.
 
-The default `WEB_SEARCH_MODEL` is the existing `@cf/openai/gpt-oss-20b`, which Cloudflare lists as supporting function calling. The Qwen3 and Nemotron models in the model list are also recognized as native function-calling planners, so selecting either model gives that model the server-owned web tools. Chat requests therefore use the web-search planning path before the requested model's final inference. The legacy `web_search` field is accepted for compatibility but no longer turns search on or off.
+The selected chat model is also the tool-using model; there is no hidden planner model. The legacy `web_search` field is accepted for compatibility but no longer turns search on or off. Tool selection belongs to the model, just like OpenClaw/Hermes-style tool use.
 
 ## Live Workers AI usage
 

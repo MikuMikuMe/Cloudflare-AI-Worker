@@ -57,8 +57,8 @@
     // Default model used when a client sends an unknown/OpenAI-style model name.
     "DEFAULT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8",
 
-    // Existing Workers AI model used for the default web-search planning turn.
-    // This model is documented by Cloudflare as supporting traditional function calling.
+    // Compatibility fallback for web-search helper callers that do not provide
+    // a selected model; normal chat requests use the selected model itself.
     "WEB_SEARCH_MODEL": "@cf/openai/gpt-oss-20b",
 
     // Set SEARXNG_URL outside this file only when a SearXNG-compatible JSON endpoint is approved.

@@ -118,7 +118,7 @@ export function dashboardPage(email: string, teamDomain: string): string {
       <div><h2>Playground</h2><div class="hint">Streams through <code>/v1/chat/completions</code> using your Access session — no key needed here.</div></div>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="model"></select>
-        <span class="search-status" title="The model always has access to server-managed live web search">Live web search · automatic</span>
+        <span class="search-status" title="The selected model can call server-managed web tools when needed">Live web tools · model decides</span>
         <button class="btn ghost" id="clear">Clear</button>
       </div>
     </div>
