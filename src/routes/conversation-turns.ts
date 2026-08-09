@@ -5,6 +5,7 @@ import {
   type ConversationMessageRecord,
   type ConversationOwner,
 } from '../lib/conversations';
+import { CLOUDFLARE_NEURONS_EXHAUSTED_CODE } from '../lib/cloudflare-usage';
 import { wrapPersistedSseResponse, type PersistedAssistantResult } from '../lib/persisted-stream';
 import { json } from '../lib/http';
 import { handleChatCompletions } from './v1';
@@ -292,10 +293,13 @@ export async function handlePersistentConversationTurn(
   const sameOriginUpstream = sameOriginResponse(upstream);
 
   return wrapPersistedSseResponse(sameOriginUpstream, async (result: PersistedAssistantResult) => {
+    const failureCode = result.errorCode === CLOUDFLARE_NEURONS_EXHAUSTED_CODE
+      ? CLOUDFLARE_NEURONS_EXHAUSTED_CODE
+      : 'upstream_error';
     const metadata = {
       ...result.metadata,
       ...(result.usage ? { usage: result.usage } : {}),
-      ...(result.error ? { failure: { code: 'upstream_error' } } : {}),
+      ...(result.error ? { failure: { code: failureCode } } : {}),
     };
     const persistence = finalizeConversationTurn(
       env.DB,

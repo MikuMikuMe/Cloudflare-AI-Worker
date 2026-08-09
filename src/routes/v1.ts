@@ -2,7 +2,13 @@
 
 import { verifyAccessJwt } from '../lib/access';
 import { extractSearchSources, toOpenAISearchStream } from '../lib/ai-search';
-import { cloudflareNeuronsExhausted } from '../lib/cloudflare-usage';
+import {
+  CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+  CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+  cloudflareNeuronsExhausted,
+  isCloudflareNeuronsExhaustedError,
+  recordCloudflareNeuronsExhausted,
+} from '../lib/cloudflare-usage';
 import {
   buildCompletion,
   estimatePromptTokens,
@@ -36,6 +42,16 @@ import type { ChatCompletionRequest, ChatMessage, ChatToolCall, EmbeddingsReques
 const WEB_SEARCH_INSTANCE = 'lofuyu-web-search';
 
 type AuthResult = { ok: true; keyId: string | null } | { ok: false; response: Response };
+
+function cloudflareNeuronsExhaustedResponse(): Response {
+  return apiError(
+    CLOUDFLARE_NEURONS_EXHAUSTED_MESSAGE,
+    429,
+    'rate_limit_error',
+    CLOUDFLARE_NEURONS_EXHAUSTED_CODE,
+    'model',
+  );
+}
 
 /** API keys are for external callers; an Access session is also accepted for convenience. */
 async function authorise(request: Request, env: Env): Promise<AuthResult> {
@@ -249,16 +265,11 @@ export async function handleChatCompletions(
   }
 
   const nvidiaProvider = isNvidiaModel(model, nvidiaModels);
+  let quotaObservationAt = new Date();
   if (isCloudflareModel(model)) {
-    const quota = await cloudflareNeuronsExhausted(env);
+    const quota = await cloudflareNeuronsExhausted(env, quotaObservationAt);
     if (quota.depleted) {
-      return apiError(
-        'Cloudflare Workers AI has reached its daily free-neuron limit. Choose an NVIDIA NIM model from GET /v1/models; Cloudflare models will be enabled again after the UTC reset.',
-        429,
-        'rate_limit_error',
-        'cloudflare_neurons_exhausted',
-        'model',
-      );
+      return cloudflareNeuronsExhaustedResponse();
     }
   }
 
@@ -278,6 +289,11 @@ export async function handleChatCompletions(
   const promptTokens = estimatePromptTokens(messages);
   const accountUsage = (usage: Parameters<typeof recordUsage>[3]): void => {
     if (auth.keyId) ctx.waitUntil(recordUsage(env, auth.keyId, model, usage).catch(() => undefined));
+  };
+  const accountStreamError = (code: string): void => {
+    if (isCloudflareModel(model) && code === CLOUDFLARE_NEURONS_EXHAUSTED_CODE) {
+      ctx.waitUntil(recordCloudflareNeuronsExhausted(env.DB, quotaObservationAt).catch(() => undefined));
+    }
   };
 
   let webSearchMaxResults = 5;
@@ -358,6 +374,7 @@ export async function handleChatCompletions(
           retrieval: { max_num_results: webSearchMaxResults, return_on_failure: true },
         },
       };
+      quotaObservationAt = new Date();
 
       if (body.stream === true) {
         const upstream = (await env.AI_SEARCH.chatCompletions(searchRequest as any)) as ReadableStream;
@@ -367,6 +384,7 @@ export async function handleChatCompletions(
           includeUsage: body.stream_options?.include_usage === true,
           promptTokens,
           onDone: accountUsage,
+          onError: accountStreamError,
         });
 
         return new Response(stream, {
@@ -418,6 +436,7 @@ export async function handleChatCompletions(
     if (webSearchEnabled) {
       let webAgent;
       try {
+        if (isCloudflareModel(model)) quotaObservationAt = new Date();
         webAgent = await prepareWebSearchAgent(
           env,
           messages,
@@ -447,6 +466,8 @@ export async function handleChatCompletions(
             includeUsage: body.stream_options?.include_usage === true,
             promptTokens,
             onDone: () => undefined,
+            onError: accountStreamError,
+            normalizeCloudflareQuota: isCloudflareModel(model),
           });
           return new Response(stream, {
             headers: {
@@ -473,6 +494,7 @@ export async function handleChatCompletions(
       };
 
       if (body.stream === true) {
+        if (!nvidiaProvider) quotaObservationAt = new Date();
         const upstream = nvidiaProvider
           ? (await requestNvidiaChat(env, model, nvidiaStreamBody(finalInputs))).body
           : (await env.AI.run(model as any, { ...finalInputs, stream: true } as any)) as ReadableStream;
@@ -485,6 +507,8 @@ export async function handleChatCompletions(
           priorUsage: webAgent.priorUsage,
           webSearch,
           onDone: accountUsage,
+          onError: accountStreamError,
+          normalizeCloudflareQuota: isCloudflareModel(model),
         });
 
         return new Response(stream, {
@@ -499,6 +523,7 @@ export async function handleChatCompletions(
         });
       }
 
+      if (!nvidiaProvider) quotaObservationAt = new Date();
       const raw = nvidiaProvider
         ? await requestNvidiaJson(env, model, finalInputs)
         : (await env.AI.run(model as any, finalInputs as any)) as unknown as Record<string, unknown>;
@@ -522,6 +547,7 @@ export async function handleChatCompletions(
     }
 
     if (body.stream === true) {
+      if (!nvidiaProvider) quotaObservationAt = new Date();
       const upstream = nvidiaProvider
         ? (await requestNvidiaChat(env, model, nvidiaStreamBody(inputs))).body
         : (await env.AI.run(model as any, { ...inputs, stream: true } as any)) as ReadableStream;
@@ -532,6 +558,8 @@ export async function handleChatCompletions(
         includeUsage: body.stream_options?.include_usage === true,
         promptTokens,
         onDone: accountUsage,
+        onError: accountStreamError,
+        normalizeCloudflareQuota: isCloudflareModel(model),
       });
 
       return new Response(stream, {
@@ -545,6 +573,7 @@ export async function handleChatCompletions(
       });
     }
 
+    if (!nvidiaProvider) quotaObservationAt = new Date();
     const result = nvidiaProvider
       ? await requestNvidiaJson(env, model, inputs)
       : await env.AI.run(model as any, inputs as any);
@@ -553,6 +582,10 @@ export async function handleChatCompletions(
     accountUsage(usage);
     return json(buildCompletion(id, responseModel, text, usage), 200, API_CORS);
   } catch (error) {
+    if (isCloudflareModel(model) && isCloudflareNeuronsExhaustedError(error)) {
+      await recordCloudflareNeuronsExhausted(env.DB, quotaObservationAt).catch(() => undefined);
+      return cloudflareNeuronsExhaustedResponse();
+    }
     const message = error instanceof Error ? error.message : String(error);
     const status = error instanceof NvidiaApiError ? error.status : 502;
     return apiError(`Upstream model error: ${message}`, status, 'api_error', 'upstream_error');
@@ -612,18 +645,14 @@ export async function handleEmbeddings(request: Request, env: Env, ctx: Executio
     );
   }
 
-  const quota = await cloudflareNeuronsExhausted(env);
+  let quotaObservationAt = new Date();
+  const quota = await cloudflareNeuronsExhausted(env, quotaObservationAt);
   if (quota.depleted) {
-    return apiError(
-      'Cloudflare Workers AI has reached its daily free-neuron limit. Choose an NVIDIA NIM chat model from GET /v1/models; Cloudflare models will be enabled again after the UTC reset.',
-      429,
-      'rate_limit_error',
-      'cloudflare_neurons_exhausted',
-      'model',
-    );
+    return cloudflareNeuronsExhaustedResponse();
   }
 
   try {
+    quotaObservationAt = new Date();
     const result = await env.AI.run(model as any, { text: inputs } as any);
     const vectors = extractVectors(result);
     if (vectors.length !== inputs.length) throw new Error('embedding model returned an unexpected shape');
@@ -643,6 +672,10 @@ export async function handleEmbeddings(request: Request, env: Env, ctx: Executio
       API_CORS,
     );
   } catch (error) {
+    if (isCloudflareNeuronsExhaustedError(error)) {
+      await recordCloudflareNeuronsExhausted(env.DB, quotaObservationAt).catch(() => undefined);
+      return cloudflareNeuronsExhaustedResponse();
+    }
     const message = error instanceof Error ? error.message : String(error);
     return apiError(`Upstream model error: ${message}`, 502, 'api_error', 'upstream_error');
   }

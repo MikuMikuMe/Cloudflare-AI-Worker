@@ -190,6 +190,87 @@ test('a model failure finalizes an empty assistant instead of leaving a generati
   assert.doesNotMatch(JSON.stringify(detail), /provider detail/);
 });
 
+test('a neuron quota failure persists its actionable code without raw provider details', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const conversation = await createConversation(store.db, owner, { model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' });
+  const env = { DB: store.db, DEFAULT_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' } as any;
+  const response = await handlePersistentConversationTurn(
+    new Request(`https://app.test/admin/api/conversations/${conversation.id}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: 'Fail with a useful reason',
+        model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        client_turn_id: 'turn_quota_0001',
+        expected_version: 0,
+      }),
+    }),
+    env,
+    `/admin/api/conversations/${conversation.id}/turns`,
+    context(),
+    identity,
+    {
+      runChat: async () =>
+        new Response(JSON.stringify({
+          error: {
+            message: 'Safe quota guidance',
+            code: 'cloudflare_neurons_exhausted',
+          },
+        }), {
+          status: 429,
+          headers: { 'content-type': 'application/json' },
+        }),
+    },
+  );
+
+  assert.equal(response?.status, 429);
+  const detail = await getConversation(store.db, owner, conversation.id);
+  assert.equal(detail?.messages.at(-1)?.status, 'error');
+  assert.deepEqual(detail?.messages.at(-1)?.metadata, {
+    failure: { code: 'cloudflare_neurons_exhausted' },
+  });
+  assert.doesNotMatch(JSON.stringify(detail), /Safe quota guidance/);
+});
+
+test('a streamed neuron quota failure keeps its actionable code', async (t) => {
+  const store = await database();
+  t.after(store.dispose);
+  const conversation = await createConversation(store.db, owner, { model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' });
+  const env = { DB: store.db, DEFAULT_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' } as any;
+  const response = await handlePersistentConversationTurn(
+    new Request(`https://app.test/admin/api/conversations/${conversation.id}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: 'Stream a useful failure',
+        model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        client_turn_id: 'turn_quota_0002',
+        expected_version: 0,
+      }),
+    }),
+    env,
+    `/admin/api/conversations/${conversation.id}/turns`,
+    context(),
+    identity,
+    {
+      runChat: async () => new Response(
+        'data: {"error":{"message":"Safe streamed guidance","code":"cloudflare_neurons_exhausted","debug":"provider detail"}}\n\n',
+        { headers: { 'content-type': 'text/event-stream' } },
+      ),
+    },
+  );
+
+  assert.equal(response?.status, 200);
+  await response?.text();
+  const detail = await getConversation(store.db, owner, conversation.id);
+  assert.equal(detail?.messages.at(-1)?.status, 'error');
+  assert.deepEqual(detail?.messages.at(-1)?.metadata, {
+    failure: { code: 'cloudflare_neurons_exhausted' },
+  });
+  assert.doesNotMatch(JSON.stringify(detail), /Safe streamed guidance|provider detail/);
+});
+
 test('a provider EOF stays an error through the model adapter and persistence wrapper', async (t) => {
   const store = await database();
   t.after(store.dispose);

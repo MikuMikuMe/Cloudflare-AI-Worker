@@ -1,6 +1,45 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CloudflareUsageError, fetchCloudflareNeurons } from '../src/lib/cloudflare-usage';
+import {
+  CloudflareUsageError,
+  cloudflareNeuronsExhausted,
+  fetchCloudflareNeurons,
+  isCloudflareNeuronsExhaustedError,
+  recordCloudflareNeuronsExhausted,
+} from '../src/lib/cloudflare-usage';
+
+function quotaDatabase(): D1Database {
+  let row: { provider: string; day: string; reason: string; expiresAt: number } | null = null;
+  return {
+    prepare(query: string) {
+      let values: unknown[] = [];
+      return {
+        bind(...next: unknown[]) {
+          values = next;
+          return this;
+        },
+        async first() {
+          if (!query.includes('provider_daily_status') || !query.includes('SELECT') || !row) return null;
+          const [provider, day, now] = values;
+          return row.provider === provider && row.day === day && row.expiresAt > Number(now)
+            ? { reason_code: row.reason }
+            : null;
+        },
+        async run() {
+          if (query.includes('INSERT INTO provider_daily_status')) {
+            row = {
+              provider: String(values[0]),
+              day: String(values[1]),
+              reason: String(values[2]),
+              expiresAt: Number(values[3]),
+            };
+          }
+          return { success: true };
+        },
+      };
+    },
+  } as unknown as D1Database;
+}
 
 function environment(): Record<string, unknown> {
   return {
@@ -51,10 +90,67 @@ test('reads today’s Workers AI neurons from Cloudflare GraphQL analytics', asy
     assert.match(body.query, /aiInferenceAdaptive/);
     assert.match(body.query, /neurons/);
     assert.match(body.query, /sampleInterval/);
+    assert.match(body.query, /errorCode/);
     assert.equal(body.variables.accountTag, 'account-test');
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('treats quota-rejected analytics rows as exhausted even when they report zero neurons', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    Response.json({
+      data: {
+        viewer: {
+          accounts: [{ aiInferenceAdaptive: [{ neurons: 0, sampleInterval: 1, errorCode: 4006 }] }],
+        },
+      },
+    })) as typeof fetch;
+
+  try {
+    const result = await fetchCloudflareNeurons(environment() as any);
+    assert.equal(result.used_neurons, 0);
+    assert.equal(result.quota_exhausted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('an authoritative quota circuit remains active only until the next UTC reset', async () => {
+  const db = quotaDatabase();
+  const observedAt = new Date('2026-08-09T23:59:00.000Z');
+  await recordCloudflareNeuronsExhausted(db, observedAt);
+
+  const env = { DB: db } as any;
+  const beforeReset = await cloudflareNeuronsExhausted(env, new Date('2026-08-09T23:59:59.999Z'));
+  assert.equal(beforeReset.depleted, true);
+  assert.equal(beforeReset.usage?.used_neurons, null);
+  assert.equal(beforeReset.usage?.source, 'workers-ai-binding-quota-circuit');
+  assert.equal(beforeReset.usage?.reset_at, '2026-08-10T00:00:00.000Z');
+
+  const afterReset = await cloudflareNeuronsExhausted(env, new Date('2026-08-10T00:00:00.000Z'));
+  assert.equal(afterReset.depleted, false);
+});
+
+test('recognizes documented and production Workers AI quota errors without matching capacity errors', () => {
+  assert.equal(
+    isCloudflareNeuronsExhaustedError(Object.assign(new Error('account limited'), { code: 3036 })),
+    true,
+  );
+  assert.equal(
+    isCloudflareNeuronsExhaustedError(
+      new Error('4006: you have used up your daily free allocation of 10,000 neurons'),
+    ),
+    true,
+  );
+  assert.equal(
+    isCloudflareNeuronsExhaustedError({
+      error: { code: 4006, message: 'daily free allocation reached' },
+    }),
+    true,
+  );
+  assert.equal(isCloudflareNeuronsExhaustedError(Object.assign(new Error('out of capacity'), { code: 3040 })), false);
 });
 
 test('returns zero when Cloudflare has no Workers AI inference rows today', async () => {

@@ -9,6 +9,7 @@ export interface PersistedAssistantResult {
   metadata: Record<string, unknown>;
   usage?: Usage;
   error?: string;
+  errorCode?: string;
 }
 
 type FinalizeAssistant = (result: PersistedAssistantResult) => Promise<void>;
@@ -227,6 +228,7 @@ export function wrapPersistedSseResponse(
   let text = '';
   let usage: Usage | undefined;
   let errorMessage: string | undefined;
+  let errorCode: string | undefined;
   let webSearch: Record<string, unknown> | undefined;
   let siteSearch: Record<string, unknown> | undefined;
   let persistenceLimitError: string | undefined;
@@ -239,6 +241,7 @@ export function wrapPersistedSseResponse(
     metadata: boundedMetadata(webSearch, siteSearch),
     ...(usage ? { usage } : {}),
     ...(errorMessage ? { error: errorMessage } : {}),
+    ...(errorMessage && errorCode ? { errorCode } : {}),
   });
 
   const finalizeOnce = (status: PersistedAssistantStatus): Promise<void> => {
@@ -314,6 +317,8 @@ export function wrapPersistedSseResponse(
             const error = asRecord(record?.error);
             const safeError = boundedString(error?.message, 500);
             if (safeError) errorMessage = safeError;
+            const safeErrorCode = boundedString(error?.code, 100);
+            if (safeErrorCode) errorCode = safeErrorCode;
           } catch {
             // Preserve extension events we do not understand, but never store them.
           }

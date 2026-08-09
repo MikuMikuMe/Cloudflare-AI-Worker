@@ -230,7 +230,9 @@ function createSseDecoder(onEvent){
     var event;
     try { event = JSON.parse(payload); } catch(e) { return; }
     if (event.error) {
-      throw new Error((event.error && event.error.message) || 'The model stream stopped unexpectedly.');
+      var streamError = new Error((event.error && event.error.message) || 'The model stream stopped unexpectedly.');
+      streamError.code = event.error && event.error.code;
+      throw streamError;
     }
     onEvent(event);
   }
@@ -767,6 +769,8 @@ var conversationLoadToken = 0;
 var conversationLoading = false;
 var modelsLoaded = false;
 var pendingModel = '';
+var cloudflareQuotaResetTimer = null;
+var cloudflareQuotaResetRetryUntil = 0;
 var conversationMutation = null;
 var lastDeviceSync = Date.now();
 
@@ -1244,6 +1248,15 @@ function messageMetadata(value){
   return {};
 }
 
+function messageFailureText(message){
+  var metadata = messageMetadata(message && message.metadata);
+  var failure = metadata.failure && typeof metadata.failure === 'object' ? metadata.failure : {};
+  if (failure.code === 'cloudflare_neurons_exhausted') {
+    return "Cloudflare Workers AI has reached this account's daily 10,000-Neuron allocation. Cloudflare models resume after the 00:00 UTC reset; chat requests can use an NVIDIA model now.";
+  }
+  return 'This response could not be completed.';
+}
+
 function messageSearchPresentation(message){
   var metadata = messageMetadata(message.metadata);
   var webSearch = metadata.web_search && typeof metadata.web_search === 'object'
@@ -1297,7 +1310,7 @@ function renderConversationMessages(messages, nextBeforeSeq, preservePosition){
       } else if (message.status === 'interrupted') {
         messageStatus(bubble, 'This response was interrupted. Send a new message to continue.', 'error', false);
       } else if (message.status === 'failed' || message.status === 'error') {
-        messageStatus(bubble, 'This response could not be completed.', 'error', false);
+        messageStatus(bubble, messageFailureText(message), 'error', false);
       }
     }
   });
@@ -1366,8 +1379,12 @@ function applyConversationModel(model){
   pendingModel = model;
   if (!modelsLoaded) return;
   var option = Array.from($('#model').options).find(function(item){ return item.value === model; });
-  if (option) {
+  if (option && !option.disabled) {
     $('#model').value = model;
+    pendingModel = '';
+  } else if (option) {
+    var firstEnabled = $('#model').querySelector('option:not([disabled])');
+    $('#model').value = firstEnabled ? firstEnabled.value : '';
     pendingModel = '';
   }
 }
@@ -1565,12 +1582,55 @@ function loadModels(){
         sel.appendChild(o);
       });
     modelsLoaded = true;
+    var cloudflareQuotaDisabled = Array.from(sel.options).some(function(option){
+      return option.disabled && option.value.indexOf('@cf/') === 0;
+    });
+    if (cloudflareQuotaDisabled) scheduleCloudflareQuotaReset();
+    else clearCloudflareQuotaReset();
     var saved = Array.from(sel.options).find(function(option){ return option.value === previous; });
     var firstEnabled = sel.querySelector('option:not([disabled])');
-    if (saved) sel.value = saved.value;
+    if (saved && !saved.disabled) sel.value = saved.value;
     else if (firstEnabled) sel.value = firstEnabled.value;
+    else sel.value = '';
     pendingModel = '';
   }).catch(function(){ $('#model').innerHTML = '<option value="">Models unavailable</option>'; });
+}
+
+function disableCloudflareModelsForQuota(){
+  var sel = $('#model');
+  Array.from(sel.options).forEach(function(option){
+    if (option.value.indexOf('@cf/') !== 0) return;
+    option.disabled = true;
+    if (option.textContent.indexOf(' · Cloudflare neurons exhausted') === -1) {
+      option.textContent += ' · Cloudflare neurons exhausted';
+    }
+  });
+  var selected = sel.selectedOptions && sel.selectedOptions[0];
+  if (selected && selected.disabled) {
+    var firstEnabled = sel.querySelector('option:not([disabled])');
+    sel.value = firstEnabled ? firstEnabled.value : '';
+  }
+  scheduleCloudflareQuotaReset();
+}
+
+function clearCloudflareQuotaReset(){
+  if (cloudflareQuotaResetTimer) clearTimeout(cloudflareQuotaResetTimer);
+  cloudflareQuotaResetTimer = null;
+  cloudflareQuotaResetRetryUntil = 0;
+}
+
+function scheduleCloudflareQuotaReset(){
+  if (cloudflareQuotaResetTimer) return;
+  var now = new Date();
+  var resetAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  var retryingReset = cloudflareQuotaResetRetryUntil > now.getTime();
+  var delay = retryingReset ? 15000 : Math.max(1000, resetAt - now.getTime() + 1000);
+  cloudflareQuotaResetTimer = setTimeout(function(){
+    cloudflareQuotaResetTimer = null;
+    if (!retryingReset) cloudflareQuotaResetRetryUntil = Date.now() + 5 * 60 * 1000;
+    loadModels();
+    loadCloudflareUsage();
+  }, delay);
 }
 
 loadModels();
@@ -1674,9 +1734,15 @@ window.addEventListener('popstate', function(){
   }
 });
 
-window.addEventListener('focus', syncFromAnotherDevice);
+window.addEventListener('focus', function(){
+  syncFromAnotherDevice();
+  loadModels();
+});
 document.addEventListener('visibilitychange', function(){
-  if (!document.hidden) syncFromAnotherDevice();
+  if (!document.hidden) {
+    syncFromAnotherDevice();
+    loadModels();
+  }
 });
 
 async function send(){
@@ -1760,6 +1826,7 @@ async function send(){
       var errorMessage = errorBody && ((errorBody.error && errorBody.error.message) || errorBody.message || errorBody.error);
       var responseError = new Error(typeof errorMessage === 'string' ? errorMessage : 'Request failed (' + res.status + ')');
       responseError.status = res.status;
+      responseError.code = errorBody && (errorBody.code || (errorBody.error && errorBody.error.code));
       throw responseError;
     }
     if (!res.body) throw new Error('The response did not include a readable stream.');
@@ -1790,7 +1857,14 @@ async function send(){
       chatHistory.push({ role: 'assistant', content: acc });
       assistantStored = true;
     }
-    messageStatus(out, 'Response interrupted: ' + (err && err.message ? err.message : 'Unknown error'), 'error', false);
+    var quotaFailure = err && err.code === 'cloudflare_neurons_exhausted';
+    if (quotaFailure) disableCloudflareModelsForQuota();
+    messageStatus(
+      out,
+      quotaFailure ? err.message : 'Response interrupted: ' + (err && err.message ? err.message : 'Unknown error'),
+      'error',
+      false
+    );
     scrollChat(false);
     if (err && (err.status === 400 || err.status === 409)) {
       userBubble.remove();
@@ -1827,16 +1901,22 @@ function neurons(n){
 }
 
 function renderCloudflareUsage(d){
-  var used = Number(d.used_neurons || 0);
+  var used = d.used_neurons == null ? null : Number(d.used_neurons || 0);
   var limit = Number(d.daily_limit_neurons || 10000);
-  var percent = limit > 0 ? Math.min(100, Math.max(0, (used / limit) * 100)) : 0;
+  var quotaExhausted = d.quota_exhausted === true;
+  var percent = quotaExhausted ? 100 : (limit > 0 ? Math.min(100, Math.max(0, (Number(used) / limit) * 100)) : 0);
   $('#cloudflare-usage').className = 'cf-usage';
   $('#cloudflare-usage').innerHTML =
     '<div class="cf-usage-head"><div><div class="cf-usage-title">Cloudflare Workers AI</div>'
     + '<div class="cf-usage-sub">Neurons used today · UTC reset at 00:00</div></div>'
-    + '<div class="cf-usage-value">' + neurons(used) + ' <small>/ ' + neurons(limit) + ' neurons</small></div></div>'
+    + '<div class="cf-usage-value">' + (quotaExhausted ? 'Exhausted' : neurons(used))
+    + ' <small>/ ' + neurons(limit) + ' neurons</small></div></div>'
     + '<div class="cf-meter"><span style="width:' + percent.toFixed(2) + '%"></span></div>'
-    + '<div class="cf-usage-note">Live account-level data from Cloudflare. This is separate from the gateway counters below.</div>';
+    + '<div class="cf-usage-note">' + (quotaExhausted
+      ? 'Quota exhaustion was confirmed by Cloudflare. Rejected-request data can arrive before usage totals; the allocation resets at 00:00 UTC.'
+      : 'Live account-level data from Cloudflare. This is separate from the gateway counters below.') + '</div>';
+  if (quotaExhausted) scheduleCloudflareQuotaReset();
+  else clearCloudflareQuotaReset();
   loadModels();
 }
 

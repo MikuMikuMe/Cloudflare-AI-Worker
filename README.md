@@ -41,7 +41,7 @@ The design, future memory boundary, and supporting research are documented in [P
 The deployment uses one Worker with:
 
 - Workers AI for Cloudflare-hosted inference
-- D1 for API-key hashes, usage counters, conversations, messages, and the NVIDIA model index
+- D1 for API-key hashes, usage counters, conversations, messages, the NVIDIA model index, and short-lived provider quota state
 - Cloudflare Access for dashboard SSO and identity verification
 - Cloudflare AI Search for opt-in indexed search over `ai.lofuyu.com`
 - Cloudflare Web Search as a managed live-search option
@@ -177,9 +177,9 @@ The Usage tab shows two different views:
 - D1 counters for requests made with this gateway's API keys
 - Account-level Workers AI Neurons read from Cloudflare's GraphQL analytics API
 
-The Cloudflare credential stays server-side. If the account ID or analytics token is not configured, or analytics is temporarily unavailable, quota enforcement fails open: Cloudflare models remain usable instead of being disabled on missing data. The dashboard reports the configuration or upstream problem rather than presenting it as zero usage.
+The Cloudflare credential stays server-side. A missing or unavailable analytics response fails open until Cloudflare provides an authoritative signal. Analytics rejection codes or a Workers AI binding quota error open a D1-backed circuit until the next UTC reset, so Cloudflare models stay disabled even when usage totals lag. The dashboard reports confirmed exhaustion instead of presenting rejected requests as zero usage.
 
-When analytics confirms that the Worker's current 10,000-Neuron daily threshold is exhausted, Cloudflare models are marked `disabled` in `/v1/models` and requests for them return `429` with `code: "cloudflare_neurons_exhausted"`.
+When Cloudflare confirms that the Worker's current 10,000-Neuron daily threshold is exhausted, Cloudflare models are marked `disabled` in `/v1/models` and requests for them return `429` with `code: "cloudflare_neurons_exhausted"`.
 
 With `NVIDIA_NIM_API_KEY` configured, the Worker refreshes NVIDIA's callable free-endpoint catalog daily and exposes matching entries from `/v1/models` with `provider: "nvidia"` and `free_endpoint: true`. NVIDIA is a user-selected alternative, not automatic model failover. Its credentials stay server-side, and its own availability, quota, and terms still apply.
 
@@ -189,7 +189,7 @@ GitHub Actions uses Node.js 22. For code changes it runs:
 
 1. `npm ci --no-audit --no-fund`
 2. TypeScript typechecking
-3. The current 62-test suite
+3. The test suite
 4. A lockfile dependency audit that fails on high or critical advisories
 
 Markdown- and `LICENSE`-only pushes and pull requests are intentionally skipped by the GitHub workflow. Cloudflare Workers Builds is the default production deployment path and deploys pushes merged to `main` with `npx wrangler deploy`.
@@ -212,7 +212,7 @@ npm run db:migrate
 npx wrangler deploy --dry-run
 ```
 
-Then merge to `main`; [Cloudflare Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) performs the production deployment. Migrations `0001` through `0003` are already applied in the current production database, but the pending-migration check remains required for future schema changes.
+Then merge to `main`; [Cloudflare Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) performs the production deployment. The repository currently contains migrations `0001` through `0004`; always verify their remote status because the pending-migration check remains required for future schema changes.
 
 Two intentional alternatives exist:
 

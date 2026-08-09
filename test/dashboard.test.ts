@@ -139,6 +139,15 @@ test('SSE decoder handles fragmented events and requires a completion sentinel',
     () => errored.push('data: {"error":{"message":"upstream failed"}}\n\n'),
     /upstream failed/i,
   );
+
+  const quota = format.createSseDecoder(() => undefined);
+  let quotaError: any;
+  try {
+    quota.push('data: {"error":{"message":"quota reached","code":"cloudflare_neurons_exhausted"}}\n\n');
+  } catch (error) {
+    quotaError = error;
+  }
+  assert.equal(quotaError?.code, 'cloudflare_neurons_exhausted');
 });
 
 test('source normalization preserves citation ordinals and strips embedded credentials', () => {
@@ -201,7 +210,15 @@ test('dashboard exposes persistent Chats navigation and conversation API actions
   assert.match(dashboard, /searchParams\.get\('conversation'\)/);
   assert.match(dashboard, /normaliseSources\(rawSources\)/);
   assert.match(dashboard, /metadata\.site_search/);
-  assert.match(dashboard, /window\.addEventListener\('focus', syncFromAnotherDevice\)/);
+  assert.match(dashboard, /failure\.code === 'cloudflare_neurons_exhausted'/);
+  assert.match(dashboard, /Cloudflare models resume after the 00:00 UTC reset/);
+  assert.match(dashboard, /responseError\.code = errorBody/);
+  assert.match(dashboard, /streamError\.code = event\.error/);
+  assert.match(dashboard, /disableCloudflareModelsForQuota/);
+  assert.match(dashboard, /scheduleCloudflareQuotaReset/);
+  assert.match(dashboard, /cloudflareQuotaResetRetryUntil/);
+  assert.match(dashboard, /saved && !saved\.disabled/);
+  assert.match(dashboard, /window\.addEventListener\('focus'/);
   assert.match(dashboard, /visibilitychange/);
   assert.doesNotMatch(dashboard, />Playground</);
   assert.doesNotMatch(dashboard, /\/admin\/api\/chat\/completions/);

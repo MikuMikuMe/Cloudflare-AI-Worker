@@ -24,6 +24,42 @@ function database(models: Array<{ id: string; created: number; owned_by: string 
   } as unknown as D1Database;
 }
 
+function quotaCircuitDatabase(): D1Database {
+  let row: { provider: string; day: string; reason: string; expiresAt: number } | null = null;
+  return {
+    prepare(query: string) {
+      let values: unknown[] = [];
+      return {
+        bind(...next: unknown[]) {
+          values = next;
+          return this;
+        },
+        async all() {
+          return { results: [] };
+        },
+        async first() {
+          if (!query.includes('provider_daily_status') || !query.includes('SELECT') || !row) return null;
+          const [provider, day, now] = values;
+          return row.provider === provider && row.day === day && row.expiresAt > Number(now)
+            ? { reason_code: row.reason }
+            : null;
+        },
+        async run() {
+          if (query.includes('INSERT INTO provider_daily_status')) {
+            row = {
+              provider: String(values[0]),
+              day: String(values[1]),
+              reason: String(values[2]),
+              expiresAt: Number(values[3]),
+            };
+          }
+          return { success: true };
+        },
+      };
+    },
+  } as unknown as D1Database;
+}
+
 test('normalizes NVIDIA model catalog and removes non-chat endpoints', () => {
   const models = normalizeNvidiaModels({
     object: 'list',
@@ -206,6 +242,89 @@ test('Cloudflare models are rejected when the live neuron limit is reached', asy
     assert.equal(response.status, 429);
     const body = await response.json() as any;
     assert.equal(body.error.code, 'cloudflare_neurons_exhausted');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('an authoritative Workers AI quota exception remains an actionable 429 if circuit storage fails', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({
+    data: { viewer: { accounts: [{ aiInferenceAdaptive: [{ neurons: 0, sampleInterval: 1 }] }] } },
+  })) as typeof fetch;
+
+  try {
+    const response = await handleChatCompletions(
+      new Request('https://ai.example.test/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', messages: [{ role: 'user', content: 'hello' }] }),
+      }),
+      {
+        AI: {
+          async run() {
+            throw new Error('4006: you have used up your daily free allocation of 10,000 neurons');
+          },
+        },
+        AI_SEARCH: undefined,
+        DB: database(),
+        DEFAULT_MODEL: '@cf/meta/llama-3.1-8b-instruct-fp8',
+        CLOUDFLARE_ACCOUNT_ID: 'account-test',
+        CLOUDFLARE_USAGE_API_TOKEN: 'usage-secret',
+        ACCESS_TEAM_DOMAIN: 'example.cloudflareaccess.com',
+        ACCESS_AUD: 'test-audience',
+      } as any,
+      context(),
+      true,
+    );
+
+    assert.equal(response.status, 429);
+    const body = await response.json() as any;
+    assert.equal(body.error.type, 'rate_limit_error');
+    assert.equal(body.error.code, 'cloudflare_neurons_exhausted');
+    assert.match(body.error.message, /10,000-Neuron allocation/);
+    assert.doesNotMatch(body.error.message, /Upstream model error/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('an authoritative Workers AI quota exception opens a circuit for later requests', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({
+    data: { viewer: { accounts: [{ aiInferenceAdaptive: [{ neurons: 0, sampleInterval: 1 }] }] } },
+  })) as typeof fetch;
+
+  const db = quotaCircuitDatabase();
+  let modelCalls = 0;
+  const env = {
+    AI: {
+      async run() {
+        modelCalls += 1;
+        throw Object.assign(new Error('account limited'), { code: 4006 });
+      },
+    },
+    AI_SEARCH: undefined,
+    DB: db,
+    DEFAULT_MODEL: '@cf/meta/llama-3.1-8b-instruct-fp8',
+    CLOUDFLARE_ACCOUNT_ID: 'account-test',
+    CLOUDFLARE_USAGE_API_TOKEN: 'usage-secret',
+    ACCESS_TEAM_DOMAIN: 'example.cloudflareaccess.com',
+    ACCESS_AUD: 'test-audience',
+  } as any;
+  const request = () => new Request('https://ai.example.test/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', messages: [{ role: 'user', content: 'hello' }] }),
+  });
+
+  try {
+    const first = await handleChatCompletions(request(), env, context(), true);
+    const second = await handleChatCompletions(request(), env, context(), true);
+
+    assert.equal(first.status, 429);
+    assert.equal(second.status, 429);
+    assert.equal(modelCalls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
